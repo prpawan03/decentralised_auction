@@ -1,0 +1,52 @@
+.App-header {
+  background-color: #282c34;
+  min-height: 10vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.card {
+  margin: 20px;
+  padding: 20px;
+  border: 1px solid #ccc;
+  display: inline-block;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+.feed {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-evenly;
+  padding: 20px;
+}
+
+.btn-addItem {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 75px;       /* Ensure a fixed width */
+  height: 75px;      /* Ensure a fixed height */
+  display: flex;     /* Flex to center the icon */
+  align-items: center; /* Center align icon vertically */
+  justify-content: center; /* Center align icon horizontally */
+  background-color: #007BFF;
+  color: white;
+  border: none;
+  border-radius: 50%;   /* Perfect circle */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.btn-addItem:hover {
+  background-color: #0056b3;
+}
