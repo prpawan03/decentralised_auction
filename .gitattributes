@@ -1,0 +1,40 @@
+# Normalize all text files to LF in the repository.
+* text=auto eol=lf
+
+# These MUST be LF. They run inside Linux containers.
+*.sh            text eol=lf
+*.bash          text eol=lf
+Makefile        text eol=lf
+Dockerfile*     text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+.env*           text eol=lf
+
+# These MUST be CRLF. They run on Windows.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# Source
+*.sol           text eol=lf diff=solidity
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.jsx           text eol=lf
+*.json          text eol=lf
+*.css           text eol=lf
+*.md            text eol=lf
+
+# Binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+
+# Generated files: collapse in diffs, exclude from language stats.
+web/src/generated.ts        linguist-generated=true
+**/package-lock.json        linguist-generated=true
+**/pnpm-lock.yaml           linguist-generated=true
