@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# CodeQL analysis.
+#
+# CodeQL reads the JavaScript and TypeScript code and it reports a security
+# problem in the GitHub security tab.
+#
+# CodeQL has no Solidity analyser. Slither covers the Solidity code, and it
+# runs in ci.yml.
+# ---------------------------------------------------------------------------
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run every Monday at 06:00 UTC. A scheduled run finds a problem that a
+    # new CodeQL rule reports, even when nobody changed the code.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyse ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

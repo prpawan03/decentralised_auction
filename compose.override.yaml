@@ -1,0 +1,115 @@
+# ---------------------------------------------------------------------------
+# Development overrides.
+#
+# Compose loads this file automatically, so `docker compose up` starts the
+# development stack. `make prod` passes an explicit file list and therefore
+# ignores this file.
+#
+# WHY THERE IS NO BIND MOUNT
+# The repository sits under C:\Users\...\Downloads on Windows. A bind mount
+# from that path into a Linux container crosses the 9p or virtiofs boundary,
+# and a Vite project reads thousands of small files. The result is a slow
+# start and unreliable file change events, which then forces polling.
+# `develop: watch:` avoids the problem. Compose copies a changed file into the
+# container over the Docker API. There is no shared file system, so there is
+# also no anonymous `node_modules` volume to hide the installed packages.
+#
+# Start the watcher with `make watch` or `npm run dev`.
+#
+# This file uses the `!override` and `!reset` tags. Both need Docker Compose
+# v2.24 or later.
+# ---------------------------------------------------------------------------
+
+services:
+  chain:
+    environment:
+      # A short block time shows the pending state during a demonstration.
+      BLOCK_TIME: ${BLOCK_TIME:-2}
+
+  deployer:
+    develop:
+      watch:
+        # A change to a contract or a script MUST rebuild and rerun the
+        # deployment. `rebuild` recreates the container, so the deployment
+        # runs again and the web service restarts behind it.
+        - action: rebuild
+          path: ./contracts/src
+        - action: rebuild
+          path: ./contracts/scripts
+        - action: rebuild
+          path: ./contracts/hardhat.config.ts
+        - action: rebuild
+          path: ./contracts/package.json
+
+  web:
+    build:
+      # The development target runs Vite instead of nginx.
+      target: dev
+    image: auction/web:dev
+    # `ports` is merged by default, and a merge would publish the same host
+    # port twice. `!override` replaces the list instead.
+    ports: !override
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
+    environment:
+      # The Vite development server does not run the nginx entry point, so
+      # `window.__AUCTION_CONFIG__` is absent. The application falls back to
+      # these values. The names match the fallbacks that are documented in
+      # docker/web-entrypoint.d/10-runtime-config.sh.
+      VITE_CHAIN_ID: ${CHAIN_ID:-31337}
+      VITE_CHAIN_NAME: ${CHAIN_NAME:-Auction Local}
+      VITE_RPC_URL: ${PUBLIC_RPC_URL:-http://127.0.0.1:8545}
+      VITE_AUCTION_HOUSE_ADDRESS: ${AUCTION_HOUSE_ADDRESS:-}
+      VITE_DEMO_NFT_ADDRESS: ${DEMO_NFT_ADDRESS:-}
+      VITE_BLOCK_TIME: ${BLOCK_TIME:-2}
+      VITE_SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      VITE_BUILD_VERSION: dev
+      VITE_BLOCK_EXPLORER_URL: ${BLOCK_EXPLORER_URL:-}
+      VITE_WALLETCONNECT_PROJECT_ID: ${WALLETCONNECT_PROJECT_ID:-}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    # Vite writes a dependency cache into node_modules/.vite, so the file
+    # system MUST be writable during development.
+    read_only: false
+    # The nginx paths do not exist in the node image. Remove them.
+    tmpfs: !reset null
+    develop:
+      watch:
+        # `sync` copies a changed file into the running container. Vite then
+        # applies hot module replacement.
+        - action: sync
+          path: ./web/src
+          target: /app/web/src
+        - action: sync
+          path: ./web/public
+          target: /app/web/public
+        - action: sync
+          path: ./web/index.html
+          target: /app/web/index.html
+        # A change to the Vite configuration needs a server restart, because
+        # Vite reads the file only at start-up.
+        - action: sync+restart
+          path: ./web/vite.config.ts
+          target: /app/web/vite.config.ts
+        - action: sync+restart
+          path: ./web/tsconfig.json
+          target: /app/web/tsconfig.json
+        # A dependency change needs a new image, because `npm ci` runs during
+        # the build.
+        - action: rebuild
+          path: ./web/package.json
+        - action: rebuild
+          path: ./package-lock.json
+    deploy:
+      resources:
+        limits:
+          # The Vite development server needs more memory than nginx.
+          cpus: "2.0"
+          memory: 2g

@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# Dependabot.
+#
+# Dependabot opens a pull request when a dependency has a new version.
+#
+# The updates are grouped. One grouped pull request is easier to review than
+# twenty separate ones, and CI runs once instead of twenty times.
+#
+# A security update always arrives as its own pull request, whatever the
+# schedule says.
+# ---------------------------------------------------------------------------
+
+version: 2
+
+updates:
+  # --- npm workspace root ---------------------------------------------------
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      # A patch or a minor update rarely breaks anything. Group them.
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+      # A major update needs a human. Keep each one separate.
+      hardhat:
+        applies-to: version-updates
+        patterns:
+          - "hardhat"
+          - "@nomicfoundation/*"
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # --- The chain image has its own manifest ---------------------------------
+  - package-ecosystem: npm
+    directory: "/docker/chain"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(chain-deps)"
+
+  # --- Base images ----------------------------------------------------------
+  - package-ecosystem: docker
+    directories:
+      - "/docker"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(docker)"
+    groups:
+      base-images:
+        patterns:
+          - "*"
+
+  # --- GitHub Actions -------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      actions:
+        patterns:
+          - "*"

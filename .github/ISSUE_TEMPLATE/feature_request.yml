@@ -1,0 +1,88 @@
+name: Feature request
+description: Suggest a new behaviour or an improvement.
+title: "feat: "
+labels:
+  - enhancement
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the suggestion.
+
+        Remember what this project is: a **local demonstration** of an NFT
+        auction. It is not a product and it does not run on a public network.
+        A request that needs a public deployment is out of scope.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you ask
+      options:
+        - label: I searched the existing issues and found no match.
+          required: true
+        - label: This request fits a local demonstration.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part does this touch?
+      options:
+        - contracts (Solidity)
+        - web (the user interface)
+        - Docker, Compose or CI
+        - Documentation
+        - More than one part
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Which problem does this solve?
+      description: >-
+        Describe the problem and not the solution. A clear problem often has a
+        simpler solution than the first idea.
+      placeholder: A viewer cannot see the time that is left before an auction ends.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What do you suggest?
+      description: Write what the new behaviour does. Write one idea in one sentence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Which other options did you consider?
+      description: Write "None" if you considered no other option.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Does this change the contract interface?
+      description: >-
+        `docs/CONTRACT_INTERFACE.md` is the single source of truth. A change
+        there affects the contract side and the web side together.
+      options:
+        - "No"
+        - "Yes, it adds a function or an event"
+        - "Yes, it changes an existing signature"
+        - I do not know
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - label: I am willing to open a pull request for this.
+          required: false

@@ -1,0 +1,233 @@
+# ---------------------------------------------------------------------------
+# NFT auction demonstration: base stack.
+#
+# This file describes the PRODUCTION shape of the stack. Compose loads
+# `compose.override.yaml` automatically and that file switches the stack to
+# the development shape. Use `make prod` to run the production shape, because
+# that target passes `-f compose.yaml -f compose.prod.yaml` and therefore
+# ignores the override file.
+#
+# Services:
+#   chain      Hardhat 3 JSON-RPC node. Long running.
+#   deployer   One-shot. Deploys the contracts, seeds the demo, then exits 0.
+#   web        The user interface. Waits for the deployer to exit 0.
+#
+# The `deployer` gate replaces the `sleep 10` race of the previous compose
+# file. The web service never starts before the contracts exist.
+#
+# Ganache and Truffle are archived software. Do not add them.
+#
+# Requires Docker Compose v2.24 or later, because this file uses the
+# `!override` tag in `compose.override.yaml`.
+# ---------------------------------------------------------------------------
+
+name: auction
+
+# --- Shared fragments ------------------------------------------------------
+
+# Log rotation. Without a limit a chain log fills the disk during a long demo.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Settings that every service uses.
+x-service-defaults: &service-defaults
+  # `init: true` runs a small process 1 that reaps zombies and forwards
+  # signals. Without it Ctrl-C can leave a container running.
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging: *logging
+
+services:
+  # -------------------------------------------------------------------------
+  # chain: the local development blockchain.
+  # -------------------------------------------------------------------------
+  chain:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/chain.Dockerfile
+      target: runtime
+      args:
+        NODE_VERSION: 24-alpine
+    image: auction/chain:local
+    container_name: auction-chain
+    restart: unless-stopped
+    networks:
+      - auction
+    environment:
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      CHAIN_PORT: "8545"
+      BLOCK_TIME: ${BLOCK_TIME:-0}
+      MNEMONIC: ${MNEMONIC:-test test test test test test test test test test test junk}
+    ports:
+      # SECURITY: the address 127.0.0.1 is deliberate. The accounts on this
+      # node are funded and the private keys are public. A bind to 0.0.0.0
+      # would offer a funded, unlocked RPC node to every device on the local
+      # network. Do not remove the 127.0.0.1 prefix.
+      - "127.0.0.1:${RPC_PORT:-8545}:8545"
+    healthcheck:
+      # The node:alpine image contains no curl. This probe sends
+      # `eth_blockNumber` and it checks the answer.
+      test: ["CMD", "node", "/opt/chain/healthcheck.js"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      # Hardhat writes a cache, artifacts and its own state at run time.
+      # If the chain fails to start with a read-only file system, set
+      # `read_only: false` here and report the path that failed.
+      - /tmp:mode=1777,size=64m
+      - /home/node:mode=1777,size=64m
+      - /opt/chain/cache:mode=1777,size=128m
+      - /opt/chain/artifacts:mode=1777,size=128m
+    stop_grace_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          memory: 256m
+
+  # -------------------------------------------------------------------------
+  # deployer: one-shot initialisation.
+  #
+  # The container MUST exit with code 0. The web service waits for that exit
+  # code. A non-zero exit stops the whole start-up, which is the wanted
+  # behaviour: a broken deployment MUST NOT produce a running user interface.
+  # -------------------------------------------------------------------------
+  deployer:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/deployer.Dockerfile
+      target: runtime
+      args:
+        NODE_VERSION: 24-alpine
+    image: auction/deployer:local
+    container_name: auction-deployer
+    # A one-shot container MUST NOT restart. A restart loop would repeat the
+    # deployment for ever.
+    restart: "no"
+    # The deployer SHARES the network namespace of the chain container.
+    #
+    # Reason: contracts/hardhat.config.ts defines its `localhost` network as
+    # `url: "http://127.0.0.1:8545"`, and `npm run deploy` targets that
+    # network. In a separate container 127.0.0.1 is the deployer itself, so
+    # the deployment would fail to connect. Sharing the namespace makes
+    # 127.0.0.1:8545 reach the chain, and the contract configuration then
+    # needs no change.
+    #
+    # This also removes the `networks` key, because Compose forbids
+    # `network_mode` together with `networks`.
+    #
+    # If contracts/hardhat.config.ts later reads the URL from the environment
+    # (`url: process.env.RPC_URL ?? "http://127.0.0.1:8545"`), replace this
+    # line with `networks: [auction]` and set RPC_URL to http://chain:8545.
+    network_mode: "service:chain"
+    depends_on:
+      chain:
+        condition: service_healthy
+    environment:
+      # 127.0.0.1 is correct here because of `network_mode` above.
+      RPC_URL: http://127.0.0.1:8545
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      MNEMONIC: ${MNEMONIC:-test test test test test test test test test test test junk}
+      DEPLOYER_PRIVATE_KEY: ${DEPLOYER_PRIVATE_KEY:-}
+      AUCTION_HOUSE_ADDRESS: ${AUCTION_HOUSE_ADDRESS:-}
+      DEMO_NFT_ADDRESS: ${DEMO_NFT_ADDRESS:-}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      WAIT_SECONDS: "120"
+    # NOTE: `read_only` is NOT set here. The Solidity compiler writes
+    # artifacts, a build cache and a deployment record. A read-only file
+    # system would need a tmpfs over the artifact directory, and that tmpfs
+    # would hide the artifacts that the image already contains. This container
+    # lives for a few seconds and it holds no port, so the exposure is small.
+    read_only: false
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  # -------------------------------------------------------------------------
+  # web: the user interface.
+  #
+  # This file builds the `prod` target: a static bundle served by
+  # nginx-unprivileged. `compose.override.yaml` replaces it with the `dev`
+  # target, which runs the Vite development server.
+  # -------------------------------------------------------------------------
+  web:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: prod
+      args:
+        NODE_VERSION: 24-alpine
+        NGINX_VERSION: 1.29-alpine
+    image: auction/web:local
+    container_name: auction-web
+    restart: unless-stopped
+    networks:
+      - auction
+    depends_on:
+      # This condition is the whole point of the deployer service. The user
+      # interface starts only after the contracts exist on the chain.
+      deployer:
+        condition: service_completed_successfully
+    environment:
+      # These values reach the browser through /config.js. The entry point
+      # docker/web-entrypoint.d/10-runtime-config.sh writes that file.
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      CHAIN_NAME: ${CHAIN_NAME:-Auction Local}
+      # This URL is used by the BROWSER, so it is a host address and not
+      # `http://chain:8545`. MetaMask runs on the host.
+      PUBLIC_RPC_URL: ${PUBLIC_RPC_URL:-http://127.0.0.1:8545}
+      AUCTION_HOUSE_ADDRESS: ${AUCTION_HOUSE_ADDRESS:-}
+      DEMO_NFT_ADDRESS: ${DEMO_NFT_ADDRESS:-}
+      BLOCK_TIME: ${BLOCK_TIME:-0}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      BUILD_VERSION: ${BUILD_VERSION:-local}
+      # Both are optional. web/src/config/runtime.ts drops an empty string.
+      BLOCK_EXPLORER_URL: ${BLOCK_EXPLORER_URL:-}
+      WALLETCONNECT_PROJECT_ID: ${WALLETCONNECT_PROJECT_ID:-}
+    ports:
+      # The host port is the same in both modes, so the browser address never
+      # changes. The container port differs: 8080 for nginx, 5173 for Vite.
+      - "127.0.0.1:${WEB_PORT:-5173}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      # The entry point copies the bundle from /opt/site into this tmpfs and
+      # then writes config.js into it. This keeps `read_only: true` while one
+      # generated file still reaches the browser.
+      - /tmp:mode=1777,size=16m
+      - /var/cache/nginx:mode=1777,size=32m
+      - /usr/share/nginx/html:mode=1777,size=64m
+    stop_grace_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+        reservations:
+          memory: 64m
+
+networks:
+  auction:
+    name: auction
+    driver: bridge
