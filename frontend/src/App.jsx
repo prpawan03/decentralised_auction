@@ -1,9 +1,9 @@
-import './App.css';
 import Web3 from 'web3';
 import React, { useEffect, useState } from 'react';
-
+import { Toaster } from 'react-hot-toast';
 import Home from './pages/Home'
 import Login from './pages/Login'
+import DecentralizedAuctionContract from './contracts/DecentralizedAuction.json';
 
 function App() {
   const [web3, setWeb3] = useState(null);
@@ -24,58 +24,78 @@ function App() {
     const initWeb3 = async () => {
       if (window.ethereum) {
         const web3Instance = new Web3(window.ethereum);
+        setWeb3(web3Instance);
+        
         try {
-          await window.ethereum.enable(); // Request account access
-          setWeb3(web3Instance);
+          // Request accounts silently if already connected, otherwise don't block
           const accounts = await web3Instance.eth.getAccounts();
           setAccounts(accounts);
-          loadContract(web3Instance);
         } catch (error) {
-          console.error("Access to your Ethereum account rejected.");
+          console.log("Accounts not yet connected");
         }
+        
+        // Always load contract if web3 is available
+        loadContract(web3Instance);
       } else {
         console.error('Please install MetaMask!');
       }
     };
 
     const loadContract = async (web3) => {
-      const contractData = require('./DecentralizedAuction.json'); // Path to JSON file
-      
-      const networkId = await web3.eth.net.getId();
-      
-      const deployedNetwork = contractData.networks[networkId];
-      
-      const contractInstance = new web3.eth.Contract(
-        contractData.abi,
-        deployedNetwork && deployedNetwork.address,
-      );
-
-      setContract(contractInstance);
-      const itemsCount = await contractInstance.methods.itemsCount().call();
-      const items = [];
-      for (let i = 0; i < itemsCount; i++) {
-        const item = await contractInstance.methods.items(i).call();
-        items.push(item);
-      }
       try {
-        //let _userItems = await contractInstance.methods.getAllUserItems().call()
-
-        // console.log(walletAddress);
-        let _userItems = items.filter(x => x.seller == walletAddress);
-
-        // console.log("_userItems")
-        // console.log(_userItems);
-        setuserItems(_userItems);
+        // Get network ID and handle BigInt if necessary
+        const networkIdRaw = await web3.eth.net.getId();
+        const networkId = networkIdRaw.toString();
         
+        console.log('Network ID:', networkId);
+        console.log('Available networks in contract:', Object.keys(DecentralizedAuctionContract.networks));
+        
+        // Try to find network by ID (string or number/BigInt)
+        let deployedNetwork = DecentralizedAuctionContract.networks[networkId];
+        
+        // Fallback: if current network is 1337 (Ganache Chain ID) but contract is on 5777 (Ganache Network ID)
+        if (!deployedNetwork && networkId === '1337') {
+             deployedNetwork = DecentralizedAuctionContract.networks['5777'];
+        }
+        
+        if (!deployedNetwork || !deployedNetwork.address) {
+          console.error('Contract not deployed to detected network.');
+          console.error('Expected network ID:', networkId);
+          console.error('Available networks:', Object.keys(DecentralizedAuctionContract.networks));
+          return;
+        }
+        
+        console.log('Contract address:', deployedNetwork.address);
+        const contractInstance = new web3.eth.Contract(
+          DecentralizedAuctionContract.abi,
+          deployedNetwork.address,
+        );
+
+        setContract(contractInstance);
+        const itemsCount = await contractInstance.methods.itemsCount().call();
+        const items = [];
+        for (let i = 0; i < itemsCount; i++) {
+          const item = await contractInstance.methods.items(i).call();
+          items.push(item);
+        }
+        // For now, if walletAddress is not set, we can't filter user items correctly yet, 
+        // but we can still set all items
+        if (walletAddress) {
+          try {
+            let _userItems = items.filter(x => x.seller === walletAddress);
+            setuserItems(_userItems);
+          } catch (error) {
+            console.log("Unable to Fetch User Items", error);
+          }
+        }
+        setItems(items);
       } catch (error) {
-        //console.log("Unable to Fetch User Items")
-        //console.log(error)
+        console.error('Error loading contract:', error);
       }
-      setItems(items);
-      
     };
     initWeb3();
-  }, [isOpenAddItemsPage,walletAddress,existingUser,toggleFeed,isLoggedIn,items]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpenAddItemsPage,walletAddress,existingUser,toggleFeed,isLoggedIn]);
 
   const toggleAddItemsPage = () => {
       setisOpenAddItemsPage(prevState => !prevState);
@@ -126,6 +146,7 @@ function App() {
   
   return (
     <>
+      <Toaster position="top-center" />
       {!isLoggedIn ? 
         <Login 
           contract={contract} 
@@ -138,7 +159,6 @@ function App() {
         />
         : 
         <Home 
-    
           items = {items} 
           userItems = {userItems}
           contract = {contract} 
@@ -150,15 +170,10 @@ function App() {
           walletAddress = {walletAddress}
           openUserAuctions = {openUserAuctions}
           toggleFeed = {toggleFeed}
-          //withdrawRefunds = {withdrawRefunds}
           endAuction = {endAuction}
         />
       }
-
-      
     </>
-
-    
   );  
 }
 

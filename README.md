@@ -1,75 +1,124 @@
+# Smart Auction Network
 
-# Decentralized Auction system
-
-A decentralized auction platform developed using Solidity for smart contracts and React.js for the frontend interface.
+A decentralized auction platform built on Ethereum blockchain, allowing users to create, bid on, and manage auctions in a trustless environment.
 
 ## Features
 
-- **User Authentication:** Allows users to sign up and log in to the platform.
-- **Add Items:** Users can list items for auction with a minimum bid requirement.
-- **Place Bids:** Participants can bid on available auction items.
-- **Buyout Option:** Allows immediate purchase of an item at the buyout price.
-- **Responsive Design:** Ensures a seamless experience across different devices.
+- **Decentralized Auctions**: Create and manage auctions using smart contracts
+- **Real-time Bidding**: Place bids and see live auction updates
+- **Instant Buyout**: Purchase items immediately at buyout price
+- **User Authentication**: Wallet-based authentication with MetaMask
+- **Modern UI**: Responsive design with Tailwind CSS
 
-## Setup Guide
+## Tech Stack
 
-### Backend Setup:
-Ensure you have [Node.js](https://nodejs.org/), [Truffle Suite](https://www.trufflesuite.com/), and [Ganache](https://www.trufflesuite.com/ganache) installed on your machine to proceed with the following steps:
+- **Frontend**: React 18, Tailwind CSS, Web3.js
+- **Smart Contracts**: Solidity 0.8.19
+- **Blockchain**: Ethereum (Ganache for local development)
+- **Framework**: Truffle Suite
+- **Containerization**: Docker & Docker Compose
 
-1. **Start Ganache:**
-   - Open Ganache and start a local blockchain instance.
+## Prerequisites
 
-2. **Compile and Deploy Contracts:**
-   - Navigate to the backend directory:
-     ```bash
-     cd backend
-     ```
-   - Compile the smart contracts:
-     ```bash
-     truffle compile
-     ```
-   - Deploy the contracts to the local blockchain:
-     ```bash
-     truffle migrate
-     ```
-     Or, to reset the state of previously deployed contracts:
-     ```bash
-     truffle migrate --reset
-     ```
+- Docker and Docker Compose
+- MetaMask browser extension
 
-3. **Integrate Contract with Frontend:**
-   - Copy the contract's JSON file to the frontend:
-     ```bash
-     cp /backend/build/contracts/DecentralizedAuction.json /frontend/src/
-     ```
+## Quick Start
 
-4. **Finalize Backend Setup:**
-   - Ensure all steps are completed without errors.
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd decentralised_auction
+```
 
-### Frontend Setup:
-Ensure you have [npm](https://www.npmjs.com/) installed to manage dependencies.
+2. **Start all services**
+```bash
+docker-compose up -d
+```
 
-1. **Prepare the Frontend Environment:**
-   - Change to the frontend directory:
-     ```bash
-     cd frontend
-     ```
-   - Install necessary dependencies:
-     ```bash
-     npm install
-     ```
+This will start:
+- Ganache blockchain on `localhost:8545`
+- Backend (Truffle) for contract deployment
+- Frontend React app on `localhost:3000`
 
-2. **Launch the Frontend Application:**
-   - Start the application:
-     ```bash
-     npm start
-     ```
-   - This will open the web application in your default browser, typically accessible at `http://localhost:3000`.
+3. **Configure MetaMask**
+- Network: `http://localhost:8545`
+- Chain ID: `1337`
+- Import one of Ganache's accounts using the private key
 
-3. **Verify Operation:**
-   - Interact with the application to ensure all functionalities such as adding items, bidding, and buyout are working correctly.
+4. **Access the application**
+- Open `http://localhost:3000` in your browser
+- Connect your MetaMask wallet
+- Register your username
+- Start creating and bidding on auctions!
 
-## Additional Information
-- Ensure your browser has the MetaMask extension installed and connected to the local blockchain provided by Ganache to interact with the deployed contracts.
+## Development
 
-- The platform can be extended or modified to include additional features such as a more advanced bidding mechanism or integration with real-world auction standards.
+### Project Structure
+```
+decentralised_auction/
+├── backend/
+│   ├── contracts/         # Solidity smart contracts
+│   ├── migrations/        # Deployment scripts
+│   └── build/            # Compiled contracts
+├── frontend/
+│   ├── src/
+│   │   ├── components/   # React components
+│   │   ├── pages/       # Page components
+│   │   └── index.css    # Tailwind styles
+│   └── public/
+└── docker-compose.yml
+```
+
+### Available Commands
+
+**Backend:**
+```bash
+cd backend
+npm run compile    # Compile smart contracts
+npm run migrate    # Deploy contracts to Ganache
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm start         # Start development server
+npm run build     # Build for production
+```
+
+### Docker Commands
+
+```bash
+# Start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+
+# Rebuild containers
+docker-compose up -d --build
+
+# Reset blockchain data
+docker-compose down -v
+docker-compose up -d
+```
+
+## Smart Contract Features
+
+- User registration with wallet addresses
+- Auction creation with minimum bid and buyout price
+- Bidding system with automatic refunds
+- Manual auction ending by seller
+- Instant buyout functionality
+
+## Contributing
+
+Built by **Pawan, Yogeesh, Vishwas & Santosh**
+
+## License
+
+ISC
+

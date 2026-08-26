@@ -1,0 +1,66 @@
+services:
+  ganache:
+    image: trufflesuite/ganache:latest
+    container_name: auction_ganache
+    ports:
+      - "8545:8545"
+    command: >
+      --wallet.deterministic
+      --wallet.totalAccounts 10
+      --wallet.defaultBalance 100
+      --chain.networkId 5777
+      --chain.chainId 1337
+      --server.host 0.0.0.0
+      --server.port 8545
+      --miner.blockGasLimit 12000000
+    networks:
+      - auction-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: auction_backend
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - contract-artifacts:/app/build/contracts
+    depends_on:
+      - ganache
+    networks:
+      - auction-network
+    environment:
+      - GANACHE_HOST=ganache
+      - GANACHE_PORT=8545
+    command: sh -c "sleep 10 && npm run migrate && tail -f /dev/null"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: auction_frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - contract-artifacts:/app/src/contracts
+    depends_on:
+      - backend
+      - ganache
+    networks:
+      - auction-network
+    environment:
+      - REACT_APP_GANACHE_URL=http://localhost:8545
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    stdin_open: true
+    tty: true
+
+volumes:
+  contract-artifacts:
+
+networks:
+  auction-network:
+    driver: bridge
+
