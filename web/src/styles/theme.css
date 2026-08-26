@@ -1,0 +1,91 @@
+/* ---------------------------------------------------------------------------
+ * Design tokens — "refined dark trading desk".
+ *
+ * Tailwind CSS v4 is CSS-first: this @theme block IS the config. There is no
+ * tailwind.config.js and no postcss.config.js in this package, on purpose.
+ *
+ * DARK IS THE DEFAULT. The light theme overrides the same token names below,
+ * so every component is written once against semantic names.
+ *
+ * Every foreground/background pair used by the app is checked by
+ * `npm run check:contrast`, which parses THIS FILE. It does not trust a
+ * comment; it computes the WCAG 2.2 relative-luminance ratio and exits
+ * non-zero on any pair under its threshold. If you change a hex here, run it.
+ * ------------------------------------------------------------------------- */
+
+@theme {
+  /* -- surfaces, darkest to lightest ------------------------------------- */
+  --color-ground: #0a0f14;
+  --color-surface: #111a21;
+  --color-raised: #18242c;
+
+  /* hairline separators (decorative — not load-bearing for comprehension) */
+  --color-line: #24343e;
+  /* borders of real controls: inputs, buttons, focusable boxes. >= 3:1 */
+  --color-line-strong: #62798a;
+
+  /* -- text -------------------------------------------------------------- */
+  --color-ink: #e8f1f6;
+  --color-ink-2: #a9bece;
+  --color-ink-3: #8299a8;
+
+  /* -- accent (interaction only, never state) ---------------------------- */
+  --color-action: #4c8dff;
+  --color-action-hover: #74a6ff;
+  /* text drawn ON a solid --color-action fill */
+  --color-on-action: #0a0f14;
+
+  /* -- semantic state (never the accent, never colour alone) ------------- */
+  --color-live: #35d0a5;
+  --color-on-live: #0a0f14;
+  --color-warn: #ffb020;
+  --color-on-warn: #0a0f14;
+  --color-danger: #ff5c5c;
+  --color-on-danger: #0a0f14;
+
+  /* -- type -------------------------------------------------------------- */
+  --font-sans: "Chivo", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Chivo Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* -- geometry: sharp corners, hairline rules ---------------------------- */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+
+  /* the sticky header height, reused by scroll-margin-top */
+  --spacing-header: 3.5rem;
+}
+
+/* ---------------------------------------------------------------------------
+ * Light theme. Same token names, different values, same contrast bar.
+ * `.theme-light` is set on <html> by the theme toggle; the media query covers
+ * a visitor who has never touched the toggle.
+ * ------------------------------------------------------------------------- */
+
+@layer theme {
+  /* LIGHT-THEME-TOKENS-START */
+  :root.theme-light {
+    --color-ground: #f5f7f9;
+    --color-surface: #ffffff;
+    --color-raised: #ecf0f3;
+
+    --color-line: #cbd5dd;
+    --color-line-strong: #6b7c8a;
+
+    --color-ink: #0b141a;
+    --color-ink-2: #3a4c58;
+    --color-ink-3: #55697a;
+
+    --color-action: #0b5cd8;
+    --color-action-hover: #08479f;
+    --color-on-action: #ffffff;
+
+    --color-live: #05674d;
+    --color-on-live: #ffffff;
+    --color-warn: #8a5300;
+    --color-on-warn: #ffffff;
+    --color-danger: #c22a2a;
+    --color-on-danger: #ffffff;
+  }
+  /* LIGHT-THEME-TOKENS-END */
+}

@@ -1,0 +1,58 @@
+<!doctype html>
+<!-- SC 3.1.1 Language of Page -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- SC 1.4.4 Resize Text / 1.4.10 Reflow: no maximum-scale, no user-scalable=no -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="AuctionHouse — a local-chain NFT auction terminal. Browsable without a wallet."
+    />
+    <title>AuctionHouse</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,300..900;1,300..900&family=Chivo+Mono:ital,wght@0,300..700;1,300..700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!--
+      Runtime config. In production the nginx entrypoint REWRITES this file
+      from environment variables at container start, so the contract address is
+      never baked into the JS bundle at build time. In dev it is a no-op and
+      src/config/runtime.ts falls through to import.meta.env / local defaults.
+    -->
+    <script src="/config.js"></script>
+
+    <!--
+      Theme boot. Runs before first paint so a light-theme user never sees a
+      dark flash. Dark is the default; an explicit stored choice always wins.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("auction:theme");
+          var prefersLight =
+            !stored && window.matchMedia("(prefers-color-scheme: light)").matches;
+          if (stored === "light" || prefersLight) {
+            document.documentElement.classList.add("theme-light");
+          }
+        } catch (e) {
+          /* private mode, blocked storage: dark default is fine */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p style="padding: 2rem; font-family: system-ui">
+        AuctionHouse needs JavaScript to read the chain. Enable it and reload.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
