@@ -216,10 +216,21 @@ contract RegressionTest is AuctionHouseBase {
     }
 
     /**
-     * @notice A hostile NFT contract that freezes transfers after listing cannot
-     *         trap anyone's ETH. The money still moves; only the token stays put.
+     * @notice The seller MUST NOT be paid for a token the winner never received.
+     * @dev This test replaces `test_HostileNftCannotBlockSettlement`, which
+     *      asserted the opposite and so encoded the critical bug as the intended
+     *      behaviour: it checked only that `fee + pendingReturns(seller)` came to
+     *      the whole winning bid, and never looked at the winner at all.
+     *
+     *      The exploit it missed: a seller lists a token from a collection whose
+     *      transfers they can switch off, takes a real winning bid, switches
+     *      transfers off, and lets anyone settle. Under the old ordering the
+     *      seller was credited 97.5% of the bid and the winner walked away with
+     *      no token and no refund, with no way back.
+     *
+     *      The rule now is that the handover gates the payout.
      */
-    function test_HostileNftCannotBlockSettlement() public {
+    function test_HostileNftSellerCannotStealTheWinningBid() public {
         HostileNFT hostile = new HostileNFT();
         vm.startPrank(seller);
         uint256 tokenId = hostile.mint(seller);
@@ -228,20 +239,159 @@ contract RegressionTest is AuctionHouseBase {
         vm.stopPrank();
 
         vm.prank(alice);
-        house.bid{value: 2 ether}(auctionId);
+        house.bid{value: 10 ether}(auctionId);
 
-        // The seller turns the collection hostile, hoping to trap the bid.
+        // The seller turns the collection hostile, hoping to be paid for a token
+        // that can no longer move.
         hostile.setBlocking(true);
 
         vm.warp(START_TIME + 1 hours);
         house.settle(auctionId);
 
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Settled));
-        // The ETH moved regardless of the token.
-        uint256 fee = house.pendingReturns(feeSink);
-        assertEq(fee + house.pendingReturns(seller), 2 ether);
+        // The winner holds EITHER the token OR a full credit. Never neither.
+        bool holdsToken = hostile.ownerOf(tokenId) == alice;
+        assertTrue(
+            holdsToken || house.pendingReturns(alice) == 10 ether,
+            "the winner got no token and no refund"
+        );
+        // On this path it is the credit, and the sale is recorded as void.
+        assertFalse(holdsToken);
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.DeliveryFailed));
+        assertEq(house.pendingReturns(alice), 10 ether, "the winner was not made whole");
+
+        // And the seller is credited nothing at all, nor is the platform.
+        assertEq(house.pendingReturns(seller), 0, "the seller was paid for an undelivered token");
+        assertEq(house.pendingReturns(feeSink), 0, "a fee was taken on an undelivered token");
         vm.prank(seller);
-        assertGt(house.withdraw(), 0);
+        vm.expectRevert(AuctionHouse.NothingToWithdraw.selector);
+        house.withdraw();
+
+        // The winner's refund is real money, not just an entry.
+        vm.prank(alice);
+        assertEq(house.withdraw(), 10 ether);
+        assertEq(house.escrowOf(auctionId), 0);
+        _assertSolvent();
+    }
+
+    /**
+     * @notice The other half of the same trade: with the collection working, the
+     *         delivery succeeds and the seller IS paid.
+     * @dev Without this, gating the payout on delivery could be satisfied by
+     *      never paying anyone.
+     */
+    function test_HostileNftThatBehavesStillPaysTheSeller() public {
+        HostileNFT hostile = new HostileNFT();
+        vm.startPrank(seller);
+        uint256 tokenId = hostile.mint(seller);
+        hostile.approve(address(house), tokenId);
+        uint256 auctionId = house.createAuction(address(hostile), tokenId, 0, 0, 1 hours);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        house.bid{value: 10 ether}(auctionId);
+
+        vm.warp(START_TIME + 1 hours);
+        house.settle(auctionId);
+
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Settled));
+        assertEq(hostile.ownerOf(tokenId), alice);
+        uint256 fee = house.pendingReturns(feeSink);
+        assertEq(fee, (10 ether * FEE_BPS) / 10_000);
+        assertEq(fee + house.pendingReturns(seller), 10 ether);
+        assertEq(house.pendingReturns(alice), 0);
+    }
+
+    /**
+     * @notice A handover that reverts MUST stay recoverable.
+     * @dev No attacker is needed for this one. An `ERC721Pausable` collection
+     *      that happens to be paused when an auction closes hit the same path,
+     *      and before {AuctionHouse.claimNft} existed the token was stranded for
+     *      good: the auction is terminal, so neither {AuctionHouse.settle} nor
+     *      {AuctionHouse.cancelAuction} could ever run again.
+     */
+    function test_NftIsRecoverableAfterAReleaseFailure() public {
+        HostileNFT hostile = new HostileNFT();
+        vm.startPrank(seller);
+        uint256 tokenId = hostile.mint(seller);
+        hostile.approve(address(house), tokenId);
+        // A reserve nobody meets, so the token is owed back to the seller.
+        uint256 auctionId = house.createAuction(address(hostile), tokenId, 50 ether, 0, 1 hours);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(auctionId);
+
+        // The collection freezes, the way a paused one would.
+        hostile.setBlocking(true);
+        vm.warp(START_TIME + 1 hours);
+        house.settle(auctionId);
+
+        // The failure is recorded, not swallowed, and the money still moved.
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.ReserveNotMet));
+        assertEq(house.pendingNft(auctionId), seller, "the failed handover was not recorded");
+        assertEq(hostile.ownerOf(tokenId), address(house));
+        assertEq(house.pendingReturns(alice), 1 ether);
+
+        // While the collection is still frozen the retry reverts, and the claim
+        // survives that failure.
+        vm.prank(seller);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.TransferFailed.selector, seller, tokenId));
+        house.claimNft(auctionId);
+        assertEq(house.pendingNft(auctionId), seller, "a failed retry consumed the claim");
+
+        // The collection recovers and the token comes out of escrow.
+        hostile.setBlocking(false);
+        vm.prank(seller);
+        house.claimNft(auctionId);
+
+        assertEq(hostile.ownerOf(tokenId), seller, "the token was not recoverable");
+        assertEq(house.pendingNft(auctionId), address(0));
+
+        // And it cannot be claimed a second time.
+        vm.prank(seller);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NoPendingNft.selector, auctionId));
+        house.claimNft(auctionId);
+    }
+
+    /**
+     * @notice {AuctionHouse.buyNow} settles through the same path, so it MUST
+     *         gate the payout on delivery in exactly the same way.
+     * @dev The buy-now route was the faster version of the same theft: no wait
+     *      for `endTime`, just list, let someone buy, block the collection in the
+     *      same block, and be credited for a token that never moved.
+     */
+    function test_HostileNftSellerCannotStealABuyNowPayment() public {
+        HostileNFT hostile = new HostileNFT();
+        vm.startPrank(seller);
+        uint256 tokenId = hostile.mint(seller);
+        hostile.approve(address(house), tokenId);
+        uint256 auctionId = house.createAuction(address(hostile), tokenId, 0, 5 ether, 1 hours);
+        vm.stopPrank();
+
+        hostile.setBlocking(true);
+
+        vm.prank(alice);
+        house.buyNow{value: 5 ether}(auctionId);
+
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.DeliveryFailed));
+        assertEq(house.pendingReturns(alice), 5 ether, "the buyer was not made whole");
+        assertEq(house.pendingReturns(seller), 0, "the seller was paid for an undelivered token");
+        assertEq(house.pendingReturns(feeSink), 0);
+        assertEq(house.pendingNft(auctionId), seller, "the void sale did not owe the token back");
+        _assertSolvent();
+    }
+
+    /// @notice An auction that delivered has nothing to claim.
+    function test_RevertWhen_ClaimingAnNftThatWasDelivered() public {
+        (uint256 auctionId, ) = _listSimple(seller);
+        vm.prank(alice);
+        house.bid{value: 1 ether}(auctionId);
+        vm.warp(START_TIME + 1 hours);
+        house.settle(auctionId);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NoPendingNft.selector, auctionId));
+        house.claimNft(auctionId);
     }
 
     // =====================================================================

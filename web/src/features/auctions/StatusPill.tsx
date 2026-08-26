@@ -30,6 +30,12 @@ const PHASE: Record<AuctionPhase, { tone: Tone; label: string; title: string }> 
     label: "no reserve",
     title: "Ended below the reserve price. The bidder was refunded in full.",
   },
+  "delivery-failed": {
+    tone: "danger",
+    label: "not delivered",
+    title:
+      "The token transfer failed, so the sale was voided. The bidder was refunded in full and the seller was paid nothing.",
+  },
 };
 
 export function StatusPill({ auction, now }: { auction: Auction; now: number }) {

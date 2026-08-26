@@ -38,7 +38,7 @@ function matches(filter: Filter, phase: AuctionPhase): boolean {
     case "settleable":
       return phase === "awaiting-settlement";
     case "closed":
-      return phase === "settled" || phase === "cancelled" || phase === "reserve-not-met";
+      return phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "delivery-failed";
     case "all":
       return true;
     default:

@@ -45,7 +45,7 @@ function bucket(auctions: Auction[], subject: Address | undefined, now: number):
     }
     const isHigh = sameAddress(a.highestBidder, subject);
     const phase = phaseOf(a, now);
-    const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met";
+    const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "delivery-failed";
 
     if (isHigh && !closed) out.winning.push(a);
     else if (isHigh && phase === "settled") out.won.push(a);

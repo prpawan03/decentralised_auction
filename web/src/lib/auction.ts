@@ -2,12 +2,19 @@ import type { Address } from "viem";
 import { zeroAddress } from "viem";
 import { CONTRACT_LIMITS } from "@/config/contracts";
 
-/** Mirrors `enum Status { Live, Settled, Cancelled, ReserveNotMet }`. */
+/**
+ * Mirrors `enum Status { Live, Settled, Cancelled, ReserveNotMet, DeliveryFailed }`.
+ *
+ * `DeliveryFailed` means the NFT transfer failed at settlement, so the sale was
+ * voided: the winner was credited a full refund and the seller was paid
+ * nothing. The token is owed back to the seller through `claimNft()`.
+ */
 export const AuctionStatus = {
   Live: 0,
   Settled: 1,
   Cancelled: 2,
   ReserveNotMet: 3,
+  DeliveryFailed: 4,
 } as const;
 
 export type AuctionStatusValue = (typeof AuctionStatus)[keyof typeof AuctionStatus];
@@ -25,6 +32,7 @@ export interface RawAuction {
   startTime: bigint;
   extensionCount: number;
   minIncrementBps: number;
+  platformFeeBps: number;
   status: number;
 }
 
@@ -47,7 +55,8 @@ export type AuctionPhase =
   | "awaiting-settlement" // endTime passed, status still Live
   | "settled"
   | "cancelled"
-  | "reserve-not-met";
+  | "reserve-not-met"
+  | "delivery-failed";
 
 export const ENDING_SOON_SECONDS = 300; // == ANTI_SNIPE_WINDOW
 export const FINAL_SECONDS = 60;
@@ -70,6 +79,8 @@ export function phaseOf(a: Pick<RawAuction, "status" | "endTime">, now: number):
       return "cancelled";
     case AuctionStatus.ReserveNotMet:
       return "reserve-not-met";
+    case AuctionStatus.DeliveryFailed:
+      return "delivery-failed";
     default:
       break;
   }

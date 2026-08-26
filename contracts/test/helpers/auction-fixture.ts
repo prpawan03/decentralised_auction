@@ -17,12 +17,19 @@ export const FEE_BPS = 250n;
 /** The default auction length used by {@link listAuction}. */
 export const ONE_HOUR = 3600n;
 
-/** `AuctionHouse.Status`, in declaration order. */
+/**
+ * `AuctionHouse.Status`, in declaration order.
+ *
+ * `DeliveryFailed` means the auction sold but the token could not be handed
+ * over, so the sale was voided: the winner holds a full refund, the seller was
+ * credited nothing, and the token is owed back to the seller.
+ */
 export const Status = {
   Live: 0,
   Settled: 1,
   Cancelled: 2,
   ReserveNotMet: 3,
+  DeliveryFailed: 4,
 } as const;
 
 /** Everything a test needs: a fresh house, a fresh collection, and six accounts. */

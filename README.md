@@ -68,7 +68,7 @@ To stop the stack, run `make down`. To delete all data and start again, run
 
 ## Connect MetaMask
 
-The local chain creates 10 accounts. Each account holds 1000 test ETH. The
+The local chain creates 10 accounts. Each account holds 10000 test ETH. The
 tokens have no value and exist only on your machine.
 
 **Step 1 — Add the network.** In MetaMask, select **Add network → Add a network
@@ -123,7 +123,7 @@ work.
      |------ withdraw() ---------->|<-------- withdraw() --------|
 ```
 
-Three properties make this safe:
+Three design rules limit what a hostile party can do:
 
 1. **The contract never sends ETH by itself.** It records what it owes you. You
    call `withdraw()` to collect. A bidder that rejects payments can therefore
@@ -252,8 +252,9 @@ success criteria, including text at a contrast ratio of 2.0:1 against a
 requirement of 4.5:1.
 
 `npm run check:contrast` computes the ratio of every colour pair in the theme
-and fails the build if any pair is below the threshold. Conformance is measured,
-not asserted.
+and fails the build if any pair is below the threshold. The check currently
+covers 70 colour pairs across 2 themes. All 70 pairs pass. Conformance is
+measured, not asserted.
 
 ---
 

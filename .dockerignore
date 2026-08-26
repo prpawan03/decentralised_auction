@@ -1,8 +1,85 @@
-node_modules
-npm-debug.log
+# ---------------------------------------------------------------------------
+# Build context filter.
+#
+# Every image builds from the REPOSITORY ROOT, because the npm workspace lock
+# file lives at the root. A small context makes the build fast and it keeps a
+# secret out of an image layer.
+#
+# Docker reads only this file at the context root. A rule that starts with `!`
+# adds a path back after a wider rule removed it. Order matters.
+# ---------------------------------------------------------------------------
+
+# --- Dependencies ----------------------------------------------------------
+# `npm ci` installs inside the image. A host node_modules directory holds
+# binaries that were built for Windows and they would break a Linux image.
+**/node_modules
+
+# --- Version control -------------------------------------------------------
 .git
 .gitignore
-.env
-*.md
-.DS_Store
+.gitattributes
+.github
 
+# --- Secrets ---------------------------------------------------------------
+# .env MUST NOT enter an image. Compose passes the values as environment
+# variables at run time.
+.env
+.env.*
+!.env.example
+
+# --- Build output ----------------------------------------------------------
+# The image builds its own output. A stale host copy would hide a real fault.
+web/dist
+web/.vite
+**/.vite
+contracts/artifacts
+contracts/cache
+contracts/coverage
+contracts/typechain-types
+**/dist
+**/build
+**/coverage
+**/.nyc_output
+
+# --- Legacy directories ----------------------------------------------------
+# The Truffle and Ganache stack was replaced by contracts/ and web/. Do not
+# copy it into an image.
+backend
+frontend
+
+# --- Documentation ---------------------------------------------------------
+# Documentation never changes an image. Excluding it keeps the build cache
+# valid when only a document changes.
+*.md
+docs
+LICENSE
+
+# --- Editor and operating system ------------------------------------------
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.editorconfig
+
+# --- Local tooling ---------------------------------------------------------
+Makefile
+compose.yaml
+compose.override.yaml
+compose.prod.yaml
+*.log
+npm-debug.log*
+.cache
+tmp
+temp
+
+# --- Test and CI artifacts -------------------------------------------------
+**/*.tsbuildinfo
+**/playwright-report
+**/test-results
+
+# --- Keep what the images need --------------------------------------------
+# The Dockerfiles copy these paths, so add them back after the wide rules.
+!docker
+!scripts/rpc.mjs

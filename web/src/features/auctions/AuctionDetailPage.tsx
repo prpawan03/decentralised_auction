@@ -102,7 +102,7 @@ export default function AuctionDetailPage() {
   }
 
   const phase = phaseOf(auction, now);
-  const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met";
+  const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "delivery-failed";
   const met = reserveMet(auction);
   const isSeller = sameAddress(auction.seller, address);
 

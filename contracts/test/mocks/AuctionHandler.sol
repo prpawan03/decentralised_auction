@@ -167,7 +167,10 @@ contract AuctionHandler is CommonBase, StdUtils {
         uint256 id = auctionSeed % total;
         AuctionHouse.Auction memory auction = HOUSE.getAuction(id);
         if (auction.status != AuctionHouse.Status.Live) return;
-        if (auction.highestBidder != address(0)) return;
+        // The same rule the contract applies: no bids at all, or a standing bid
+        // that is below the reserve and so was never going to win anyway. This
+        // path moves escrow into a refund, so the fuzzer must reach it.
+        if (auction.highestBidder != address(0) && auction.highestBid >= auction.reservePrice) return;
 
         vm.prank(auction.seller);
         HOUSE.cancelAuction(id);

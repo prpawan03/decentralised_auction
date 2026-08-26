@@ -11,11 +11,21 @@ strong recommendation. **MAY** is a choice.
 | --- | --- | --- |
 | Docker Desktop | 4.30 or later | Runs the stack |
 | Docker Compose | v2.24 or later | This project uses the `!override` tag |
-| Node | 22 or later | Hardhat 3 needs it |
+| Node | 22 or later, **64-bit** | Hardhat 3 needs Node 22. Vite 8 and Vitest 4 need a 64-bit build. |
 | Git | 2.40 or later | Line ending rules |
 
 `make` is optional. Windows PowerShell has no `make`. Every Makefile target
 has an npm script with the same name.
+
+### Node MUST be 64-bit
+
+Run `node -p "process.arch"`. It MUST print `x64`. Vite 8 and Vitest 4 load
+`rolldown`, which ships native bindings only for 64-bit platforms. A 32-bit
+Node has no binding to load, and the fallback cannot start either. The install
+does not fail with a clear message about this, so check the architecture
+before you report a build problem. See
+[docs/WEB_DEPENDENCIES.md](docs/WEB_DEPENDENCIES.md) for the full explanation
+and the exact error text.
 
 ## First run
 
@@ -130,6 +140,21 @@ The exact shape is documented at the top of
 `docs/CONTRACT_INTERFACE.md` is the single source of truth for the on-chain
 API. You **MUST NOT** change a signature there without telling both the
 contract side and the web side.
+
+### The generated ABI
+
+`web/src/abi/` is generated from the compiled contracts. Do not edit it by
+hand.
+
+When you change a contract, you **MUST** run this command and commit the
+result in the same pull request:
+
+```bash
+npm run export-abi --workspace contracts
+```
+
+CI runs the same command and fails the build if the committed ABI does not
+match the compiled contracts.
 
 ## Quality gates
 

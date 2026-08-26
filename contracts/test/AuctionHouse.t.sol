@@ -11,6 +11,9 @@ import {AuctionHouse} from "../src/AuctionHouse.sol";
  *      is the only runner that can drive a Solidity fuzzer.
  */
 contract AuctionHouseTest is AuctionHouseBase {
+    /// @notice The storage-layout probe could not find the `_auctions` array.
+    error AuctionsArrayNotFound();
+
     // =====================================================================
     // createAuction
     // =====================================================================
@@ -213,6 +216,61 @@ contract AuctionHouseTest is AuctionHouseBase {
         assertEq(house.getAuction(id).endTime, frozenEnd, "a capped auction was extended again");
     }
 
+    /**
+     * @notice A bid at exactly `endTime - ANTI_SNIPE_WINDOW` MUST NOT burn an
+     *         extension, because it cannot move the clock.
+     * @dev At that instant the candidate end time is exactly the current one, so
+     *      the old code applied a zero-length extension and still counted it. An
+     *      attacker could therefore spend all {AuctionHouse.MAX_EXTENSIONS}
+     *      slots from as many addresses in a single block, for the price of gas
+     *      alone - every losing bid is refunded in full - and then snipe the
+     *      auction with anti-snipe switched off.
+     *
+     *      The rest of the suite only ever warped to `endTime - 1`, which is
+     *      strictly inside the window, so this boundary was never exercised.
+     */
+    function test_AntiSnipe_ExactWindowBoundaryDoesNotBurnAnExtension() public {
+        (uint256 id, ) = _list(seller, 0, 0, 1 hours);
+
+        uint64 endTime = house.getAuction(id).endTime;
+        uint64 window = house.ANTI_SNIPE_WINDOW();
+        // Precisely the boundary, not one second inside it.
+        vm.warp(endTime - window);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.endTime, endTime, "a zero-length extension moved the clock");
+        assertEq(auction.extensionCount, 0, "the boundary bid burned an extension for free");
+
+        // One second later is genuinely inside the window, and that one counts.
+        vm.warp(endTime - window + 1);
+        _bidMinimum(bob, id);
+        assertEq(house.getAuction(id).extensionCount, 1, "a bid inside the window did not extend");
+    }
+
+    /**
+     * @notice The whole cap cannot be drained at the boundary in one block.
+     * @dev The attack in full: {AuctionHouse.MAX_EXTENSIONS} + 1 addresses, one
+     *      block, every bid landing on the boundary. Not one of them may count.
+     */
+    function test_AntiSnipe_CannotBeExhaustedAtTheBoundary() public {
+        (uint256 id, ) = _list(seller, 0, 0, 1 hours);
+
+        uint64 endTime = house.getAuction(id).endTime;
+        vm.warp(endTime - house.ANTI_SNIPE_WINDOW());
+
+        uint32 cap = house.MAX_EXTENSIONS();
+        for (uint256 i = 0; i <= cap; ++i) {
+            _bidMinimum(makeAddr(string(abi.encodePacked("snipeMule", vm.toString(i)))), id);
+        }
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.extensionCount, 0, "the anti-snipe budget was burned for free");
+        assertEq(auction.endTime, endTime);
+    }
+
     // =====================================================================
     // buyNow
     // =====================================================================
@@ -387,6 +445,65 @@ contract AuctionHouseTest is AuctionHouseBase {
         house.cancelAuction(id);
     }
 
+    /**
+     * @notice A dust bid below the reserve MUST NOT freeze the listing.
+     * @dev A bid of {AuctionHouse.MIN_INCREMENT} is refunded in full at
+     *      settlement, so it costs the bidder nothing but gas. While cancelling
+     *      required `highestBidder == address(0)`, that one bid locked the
+     *      seller's token in escrow for the whole duration - up to
+     *      {AuctionHouse.MAX_DURATION}, thirty days.
+     *
+     *      Cancelling below the reserve is now allowed, and the standing bidder
+     *      is credited exactly what settlement would have credited them.
+     */
+    function test_DustBidDoesNotFreezeTheListing() public {
+        (uint256 id, uint256 tokenId) = _list(seller, 10 ether, 0, house.MAX_DURATION());
+
+        uint96 dust = house.MIN_INCREMENT();
+        vm.prank(alice);
+        house.bid{value: dust}(id);
+        assertEq(house.escrowOf(id), dust);
+
+        vm.prank(seller);
+        house.cancelAuction(id);
+
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.Cancelled));
+        assertEq(nft.ownerOf(tokenId), seller, "the token stayed frozen in escrow");
+        // The dust bidder is made whole, to the wei, out of this auction's escrow.
+        assertEq(house.pendingReturns(alice), dust, "the standing bidder was not refunded");
+        assertEq(house.escrowOf(id), 0, "rule 7: escrow survived the cancellation");
+        assertEq(house.pendingReturns(seller), 0);
+
+        vm.prank(alice);
+        assertEq(house.withdraw(), dust);
+        _assertSolvent();
+    }
+
+    /// @notice A bid that meets the reserve is a real sale, and still blocks the exit.
+    function test_RevertWhen_CancellingAtOrAboveTheReserve() public {
+        (uint256 id, ) = _list(seller, 1 ether, 0, 1 hours);
+
+        // Exactly the reserve, not a wei above it.
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        vm.prank(seller);
+        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        house.cancelAuction(id);
+    }
+
+    /// @notice With no reserve every bid meets it, so no bid can ever be shaken off.
+    function test_RevertWhen_CancellingWithNoReserveAndADustBid() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        house.bid{value: house.MIN_INCREMENT()}(id);
+
+        vm.prank(seller);
+        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        house.cancelAuction(id);
+    }
+
     // =====================================================================
     // withdraw
     // =====================================================================
@@ -490,6 +607,81 @@ contract AuctionHouseTest is AuctionHouseBase {
         assertEq(house.pendingReturns(seller), 4 ether);
     }
 
+    /**
+     * @notice The owner MUST NOT be able to reprice an auction that is already
+     *         taking bids.
+     * @dev The fee used at settlement is the one snapshotted into the auction at
+     *      listing, not whatever the owner has set by the time it closes. Reading
+     *      the live `platformFeeBps` let the owner watch a bid land and then take
+     *      up to {AuctionHouse.MAX_FEE_BPS} of it retroactively.
+     */
+    function test_OwnerCannotRepriceALiveAuction() public {
+        // Listed at the fixture's 2.5%.
+        (uint256 id, ) = _listSimple(seller);
+        assertEq(house.getAuction(id).platformFeeBps, uint16(FEE_BPS), "the fee was not snapshotted");
+
+        vm.prank(alice);
+        house.bid{value: 10 ether}(id);
+
+        // The owner sees the bid land and raises the fee to the hard cap. The cap
+        // is read BEFORE the prank: an external call in between consumes it.
+        uint16 cap = house.MAX_FEE_BPS();
+        vm.prank(houseOwner);
+        house.setPlatformFee(cap);
+        assertEq(house.platformFeeBps(), cap);
+
+        vm.warp(START_TIME + 1 hours);
+        house.settle(id);
+
+        // The auction pays the fee it was listed with, not the new one.
+        uint256 expectedFee = (10 ether * FEE_BPS) / 10_000;
+        assertEq(house.pendingReturns(feeSink), expectedFee, "the fee was repriced under a live auction");
+        assertEq(house.pendingReturns(seller), 10 ether - expectedFee);
+        assertEq(house.getAuction(id).platformFeeBps, uint16(FEE_BPS));
+        _assertSolvent();
+    }
+
+    /// @notice A new fee still applies to everything listed after it is set.
+    function test_NewFeeAppliesToAuctionsListedAfterIt() public {
+        vm.prank(houseOwner);
+        house.setPlatformFee(1000);
+
+        (uint256 id, ) = _listSimple(seller);
+        assertEq(house.getAuction(id).platformFeeBps, 1000);
+
+        vm.prank(alice);
+        house.bid{value: 10 ether}(id);
+        vm.warp(START_TIME + 1 hours);
+        house.settle(id);
+
+        assertEq(house.pendingReturns(feeSink), (10 ether * 1000) / 10_000);
+    }
+
+    /**
+     * @notice The fee recipient MUST NOT be the house itself.
+     * @dev {AuctionHouse.withdraw} pays `msg.sender`, and the house can never be
+     *      the caller, so a fee credited to it could never be pulled back out.
+     */
+    function test_RevertWhen_FeeRecipientIsTheHouseItself() public {
+        vm.prank(houseOwner);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidFeeRecipient.selector, address(house)));
+        house.setFeeRecipient(address(house));
+
+        // The old recipient is untouched.
+        assertEq(house.feeRecipient(), feeSink);
+    }
+
+    /// @notice Any other address, including address(0), is still accepted.
+    function test_SetFeeRecipient() public {
+        vm.prank(houseOwner);
+        house.setFeeRecipient(carol);
+        assertEq(house.feeRecipient(), carol);
+
+        vm.prank(houseOwner);
+        house.setFeeRecipient(address(0));
+        assertEq(house.feeRecipient(), address(0));
+    }
+
     function test_OwnershipTransferIsTwoStep() public {
         vm.prank(houseOwner);
         house.transferOwnership(alice);
@@ -516,6 +708,52 @@ contract AuctionHouseTest is AuctionHouseBase {
         assertEq(house.getAuctions(2, 2).length, 2);
         // An offset past the end returns an empty page.
         assertEq(house.getAuctions(99, 10).length, 0);
+    }
+
+    // =====================================================================
+    // Storage layout
+    // =====================================================================
+
+    /**
+     * @notice The `Auction` struct MUST still pack into five storage slots.
+     * @dev The platform fee snapshot went into the spare bytes of slot 4, which
+     *      had 23 of its 32 bytes in use and now has 25. If it ever spills into a
+     *      sixth slot, every listing and every bid gets more expensive, so the
+     *      claim is worth pinning down rather than trusting a comment.
+     *
+     *      The proof is positional: element 1 of `_auctions` starts exactly five
+     *      slots after element 0, and slot 0 of a packed `Auction` holds that
+     *      auction's seller in its low 20 bytes.
+     */
+    function test_AuctionStructStillPacksIntoFiveSlots() public {
+        _listSimple(seller);
+        _listSimple(alice);
+
+        uint256 dataStart = uint256(keccak256(abi.encode(_auctionsArraySlot())));
+
+        assertEq(_sellerAtSlot(dataStart), seller, "element 0 is not where it was expected");
+        assertEq(
+            _sellerAtSlot(dataStart + 5),
+            alice,
+            "the Auction struct no longer packs into five storage slots"
+        );
+    }
+
+    /// @notice Locates `_auctions` by its length, which is the only state
+    ///         variable holding exactly 2 after two listings.
+    /// @return The storage slot of the `_auctions` array.
+    function _auctionsArraySlot() private view returns (uint256) {
+        for (uint256 slot = 0; slot < 16; ++slot) {
+            if (uint256(vm.load(address(house), bytes32(slot))) == 2) return slot;
+        }
+        revert AuctionsArrayNotFound();
+    }
+
+    /// @notice Reads the low 20 bytes of one storage slot as an address.
+    /// @param slot The slot to read.
+    /// @return The address packed into that slot.
+    function _sellerAtSlot(uint256 slot) private view returns (address) {
+        return address(uint160(uint256(vm.load(address(house), bytes32(slot)))));
     }
 
     // =====================================================================

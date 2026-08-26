@@ -38,6 +38,7 @@ const STRIPE_TONE: Record<string, Tone> = {
   settled: "neutral",
   cancelled: "neutral",
   "reserve-not-met": "danger",
+  "delivery-failed": "danger",
 };
 
 export interface AuctionTableProps {
@@ -201,7 +202,7 @@ export function AuctionTable({
                 </td>
 
                 <td className="px-4 py-3 text-right align-middle whitespace-nowrap">
-                  {phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" ? (
+                  {phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "delivery-failed" ? (
                     <span className="text-[0.8125rem] text-[var(--color-ink-3)]">closed</span>
                   ) : (
                     <Countdown endTime={a.endTime} size="sm" label={`Auction ${a.id.toString()}`} />

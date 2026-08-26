@@ -61,6 +61,7 @@ export function makeAuction(overrides: Partial<Auction> = {}): Auction {
     startTime: BigInt(NOW - 3_600),
     extensionCount: 0,
     minIncrementBps: 500,
+    platformFeeBps: 250,
     status: AuctionStatus.Live,
     ...overrides,
   };

@@ -123,7 +123,7 @@ export function BidDialog({ auction, minimumBid, open, onOpenChange }: BidDialog
   const phase = phaseOf(auction, now);
   const isSeller = sameAddress(auction.seller, address);
   const alreadyLeading = sameAddress(auction.highestBidder, address);
-  const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "awaiting-settlement";
+  const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "delivery-failed" || phase === "awaiting-settlement";
 
   /* The submit button is enabled ONLY on a green simulation. */
   const canSubmit =

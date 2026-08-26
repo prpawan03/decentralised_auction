@@ -25,8 +25,13 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  *         carries `nonReentrant`.
  *      3. Every auction has an `endTime`, and ANYONE may call {settle} after it.
  *         A seller can no longer freeze a bidder's money by never settling.
- *      4. The NFT is escrowed at listing and released in the same transaction
- *         that credits the seller.
+ *      4. The NFT is escrowed at listing. On a sale the handover happens FIRST
+ *         and it gates the payout: the seller is credited only once the token
+ *         has actually reached the winner. A token that cannot be delivered
+ *         voids the sale instead - the WINNER is refunded in full, the seller
+ *         is credited nothing, and the token is owed back to the seller. Any
+ *         handover that reverts is recorded in {pendingNft} and retried with
+ *         {claimNft}, so a token is never stranded.
  *      5. The seller MUST NOT bid on or buy their own auction.
  *      6. `buyNowPrice == 0` means "disabled". It never means "free".
  *      7. Escrow is accounted per auction. One auction can never spend the ETH
@@ -43,13 +48,19 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
 
     /**
      * @notice The lifecycle state of an auction.
-     * @dev `Live` is the only non-terminal state.
+     * @dev `Live` is the only non-terminal state. `DeliveryFailed` is appended
+     *      last, so the numbering of the four original members is unchanged.
+     *      It means: the auction sold, the token could NOT be handed over, so
+     *      the sale was voided. The winner holds a full refund, the seller was
+     *      credited nothing, and the token is owed back to the seller - see
+     *      {pendingNft} and {claimNft}.
      */
     enum Status {
         Live,
         Settled,
         Cancelled,
-        ReserveNotMet
+        ReserveNotMet,
+        DeliveryFailed
     }
 
     /**
@@ -66,6 +77,9 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
      * @param startTime The Unix time at which the auction opened.
      * @param extensionCount How many anti-snipe extensions have been applied.
      * @param minIncrementBps The minimum bid step, in basis points of the leading bid.
+     * @param platformFeeBps The platform fee AS IT STOOD WHEN THIS AUCTION OPENED,
+     *        in basis points. It is snapshotted so the owner cannot reprice a
+     *        live auction after the bidding has already started.
      * @param status The lifecycle state.
      */
     struct Auction {
@@ -76,10 +90,11 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
         address nft; // slot 2 (20 + 12 = 32)
         uint96 buyNowPrice;
         uint256 tokenId; // slot 3
-        uint64 endTime; // slot 4 (8 + 8 + 4 + 2 + 1 = 23)
+        uint64 endTime; // slot 4 (8 + 8 + 4 + 2 + 2 + 1 = 25)
         uint64 startTime;
         uint32 extensionCount;
         uint16 minIncrementBps;
+        uint16 platformFeeBps;
         Status status;
     }
 
@@ -186,6 +201,14 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
     /// @notice The caller already holds the leading bid.
     error AlreadyHighestBidder();
 
+    /// @notice The fee recipient is an address the fee could never be pulled from.
+    /// @param recipient The address that was asked for.
+    error InvalidFeeRecipient(address recipient);
+
+    /// @notice {claimNft} was called for an auction that has no undelivered token.
+    /// @param auctionId The auction that was asked for.
+    error NoPendingNft(uint256 auctionId);
+
     // ---------------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------------
@@ -244,8 +267,8 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
      * @param winner The winner, or `address(0)` when the reserve was not met.
      * @param seller The account that listed the NFT.
      * @param amount The winning bid, in wei.
-     * @param platformFee The fee taken from `amount`.
-     * @param outcome `Settled` or `ReserveNotMet`.
+     * @param platformFee The fee taken from `amount`. 0 unless `outcome` is `Settled`.
+     * @param outcome `Settled`, `ReserveNotMet` or `DeliveryFailed`.
      */
     event AuctionSettled(
         uint256 indexed auctionId,
@@ -294,14 +317,26 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
 
     /**
      * @notice The NFT could not be handed over, so it stays in escrow.
-     * @dev Money movement is never blocked by a broken NFT contract. This event
-     *      is the audit trail when a token cannot be delivered.
+     * @dev The failure is recorded in {pendingNft} and the token is recoverable
+     *      with {claimNft}. On a sale this event always accompanies a full
+     *      refund to the winner: the seller is never paid for a token that did
+     *      not move.
      * @param auctionId The auction.
-     * @param to The intended recipient.
+     * @param to The intended recipient, and the only address {claimNft} may
+     *        deliver the token to.
      * @param nft The ERC-721 contract.
      * @param tokenId The token id.
      */
     event NftReleaseFailed(uint256 indexed auctionId, address indexed to, address indexed nft, uint256 tokenId);
+
+    /**
+     * @notice A token that had failed to move was collected with {claimNft}.
+     * @param auctionId The auction.
+     * @param to The recorded recipient, who now holds the token.
+     * @param nft The ERC-721 contract.
+     * @param tokenId The token id.
+     */
+    event NftClaimed(uint256 indexed auctionId, address indexed to, address indexed nft, uint256 tokenId);
 
     // ---------------------------------------------------------------------
     // Storage
@@ -323,6 +358,14 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
     /// @notice Where the platform fee is credited. `address(0)` disables the fee.
     address public feeRecipient;
 
+    /**
+     * @notice The account owed a token whose handover reverted, by auction id.
+     * @dev `address(0)` means there is nothing outstanding for that auction. An
+     *      auction can only reach a terminal state once, so one auction can only
+     *      ever have one outstanding handover.
+     */
+    mapping(uint256 auctionId => address recipient) public pendingNft;
+
     // ---------------------------------------------------------------------
     // Constructor
     // ---------------------------------------------------------------------
@@ -336,6 +379,8 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
      */
     constructor(address initialOwner, address initialFeeRecipient, uint16 initialFeeBps) Ownable(initialOwner) {
         if (initialFeeBps > MAX_FEE_BPS) revert FeeTooHigh(initialFeeBps, MAX_FEE_BPS);
+        // Same rule as {setFeeRecipient}: a fee credited here could never be pulled.
+        if (initialFeeRecipient == address(this)) revert InvalidFeeRecipient(initialFeeRecipient);
         platformFeeBps = initialFeeBps;
         feeRecipient = initialFeeRecipient;
         emit PlatformFeeUpdated(0, initialFeeBps);
@@ -391,6 +436,9 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
                 startTime: startTime,
                 extensionCount: 0,
                 minIncrementBps: DEFAULT_INCREMENT_BPS,
+                // Snapshotted here, and read from here at settlement. Prevents
+                // the owner repricing an auction that is already taking bids.
+                platformFeeBps: platformFeeBps,
                 status: Status.Live
             })
         );
@@ -446,8 +494,16 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
 
         uint64 endTime = auction.endTime;
         // Anti-snipe. The extension count is capped so the auction always ends.
-        if (endTime - uint64(block.timestamp) <= ANTI_SNIPE_WINDOW && auction.extensionCount < MAX_EXTENSIONS) {
-            endTime = uint64(block.timestamp) + ANTI_SNIPE_WINDOW;
+        //
+        // The candidate is computed FIRST and the clock only moves when the
+        // candidate is genuinely later. At exactly `endTime - ANTI_SNIPE_WINDOW`
+        // the candidate equals `endTime`, and burning an extension there would
+        // be a zero-length extension: an attacker could exhaust all
+        // {MAX_EXTENSIONS} slots in one block from as many addresses, for the
+        // price of gas alone, and then snipe an auction with no anti-snipe left.
+        uint64 candidate = uint64(block.timestamp) + ANTI_SNIPE_WINDOW;
+        if (candidate > endTime && auction.extensionCount < MAX_EXTENSIONS) {
+            endTime = candidate;
             auction.endTime = endTime;
             // Invariant 5: the guard above keeps extensionCount <= MAX_EXTENSIONS.
             unchecked {
@@ -522,8 +578,20 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
     }
 
     /**
-     * @notice Withdraws a listing that has no bids and returns the NFT.
-     * @dev Seller only, and only while `highestBidder` is `address(0)`.
+     * @notice Withdraws a listing that could never have sold, and returns the NFT.
+     * @dev Seller only. It is allowed while there are no bids at all, and also
+     *      while the leading bid is BELOW the reserve price, because such a bid
+     *      was always going to be refunded in full at settlement anyway. Without
+     *      that second case a single {MIN_INCREMENT} dust bid froze a seller's
+     *      token for up to {MAX_DURATION} at no cost to the bidder.
+     *
+     *      A standing below-reserve bidder is credited every wei of this
+     *      auction's escrow, exactly as {settle} would have credited them.
+     *
+     *      A bid at or above the reserve is a real sale in waiting, so it still
+     *      reverts with {AuctionHasBids}. With no reserve every bid is at or
+     *      above it, so no auction without a reserve can ever be cancelled once
+     *      a bid arrives.
      * @param auctionId The auction to cancel.
      */
     function cancelAuction(uint256 auctionId) external nonReentrant {
@@ -531,12 +599,20 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
 
         if (auction.status != Status.Live) revert AuctionNotLive(auctionId, auction.status);
         if (msg.sender != auction.seller) revert NotSeller(msg.sender, auction.seller);
-        // Prevents a seller from pulling the item out from under a standing bid.
-        if (auction.highestBidder != address(0)) revert AuctionHasBids();
+
+        address bidder = auction.highestBidder;
+        // Prevents a seller from pulling the item out from under a winning bid.
+        if (bidder != address(0) && auction.highestBid >= auction.reservePrice) revert AuctionHasBids();
 
         // --- Effects ---
         auction.status = Status.Cancelled;
         auction.endTime = uint64(block.timestamp);
+
+        // Rule 7: the refund is taken out of THIS auction's escrow, and nothing
+        // is left behind for a second payout.
+        uint256 amount = _escrowOf[auctionId];
+        _escrowOf[auctionId] = 0;
+        if (bidder != address(0) && amount != 0) _credit(bidder, auctionId, amount);
 
         emit AuctionCancelled(auctionId, msg.sender);
 
@@ -564,6 +640,43 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
         emit Withdrawal(msg.sender, amount);
     }
 
+    /**
+     * @notice Retries a token handover that reverted when the auction closed.
+     * @dev This is the recovery path for {NftReleaseFailed}. Without it a
+     *      collection that reverted once - an `ERC721Pausable` paused at the
+     *      wrong moment is enough, no attacker required - stranded the token
+     *      forever, because the auction is already terminal and neither
+     *      {settle} nor {cancelAuction} can run again.
+     *
+     *      Deliberately permissionless: the token can only ever go to the
+     *      address recorded in {pendingNft}, so letting anyone push the retry is
+     *      strictly safer than gating it. A recipient contract that cannot make
+     *      a call of its own would otherwise be stranded by the same bug.
+     *
+     *      It is NOT gated by `whenNotPaused`: a pause must never trap property,
+     *      for the same reason it never traps money (invariant 7).
+     * @param auctionId The auction whose token is still in escrow.
+     */
+    function claimNft(uint256 auctionId) external nonReentrant {
+        Auction storage auction = _auctionAt(auctionId);
+
+        address recipient = pendingNft[auctionId];
+        if (recipient == address(0)) revert NoPendingNft(auctionId);
+
+        address nft = auction.nft;
+        uint256 tokenId = auction.tokenId;
+
+        // --- Effects. The record is cleared before the token moves. ---
+        delete pendingNft[auctionId];
+
+        // --- Interaction ---
+        // A retry that still fails reverts the whole call, which restores the
+        // record above, so the claim stays open for the next attempt.
+        if (!_tryTransferNft(nft, tokenId, recipient)) revert TransferFailed(recipient, tokenId);
+
+        emit NftClaimed(auctionId, recipient, nft, tokenId);
+    }
+
     // ---------------------------------------------------------------------
     // Write - admin (Ownable2Step)
     // ---------------------------------------------------------------------
@@ -584,7 +697,9 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
     /**
      * @notice Sets the platform fee taken from a winning bid.
      * @dev The ceiling is in code, not in policy: `bps` MUST NOT exceed
-     *      {MAX_FEE_BPS}.
+     *      {MAX_FEE_BPS}. The new fee applies only to auctions created from now
+     *      on. Every auction already open keeps the fee it was listed with,
+     *      because that fee is snapshotted into `Auction.platformFeeBps`.
      * @param bps The new fee, in basis points.
      */
     function setPlatformFee(uint16 bps) external onlyOwner {
@@ -597,11 +712,15 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
 
     /**
      * @notice Sets where the platform fee is credited.
-     * @dev Setting `address(0)` disables the fee. Prevents fees being credited
-     *      to an address nobody can withdraw from.
+     * @dev Setting `address(0)` disables the fee. Setting this contract is
+     *      rejected: {withdraw} pays `msg.sender`, and this contract can never
+     *      be the caller, so a fee credited there could never be pulled out.
      * @param recipient The new fee recipient.
      */
     function setFeeRecipient(address recipient) external onlyOwner {
+        // Prevents fees being credited to an address nobody can withdraw from.
+        if (recipient == address(this)) revert InvalidFeeRecipient(recipient);
+
         address oldRecipient = feeRecipient;
         feeRecipient = recipient;
         emit FeeRecipientUpdated(oldRecipient, recipient);
@@ -712,8 +831,25 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
     /**
      * @notice Moves an auction to a terminal state and credits every party.
      * @dev
-     *      All state is written first. The only external call is the NFT
-     *      handover, and it is the last thing that happens.
+     *      The lifecycle state and the escrow are written BEFORE any external
+     *      call, and every entry point that reaches here carries `nonReentrant`,
+     *      so nothing re-entrant can settle the same auction twice or spend the
+     *      same escrow twice. The only external calls are token handovers.
+     *
+     *      On a sale the NFT handover runs first and gates the money. This is
+     *      the fix for the critical finding: the old order credited the seller
+     *      and the fee recipient and only then tried to move the token, and it
+     *      swallowed a failed handover. A seller could therefore list a token
+     *      from a collection whose transfers they controlled, take the winning
+     *      bid, block transfers, and leave the winner with no token AND no
+     *      refund. Now a token that will not move voids the sale: the WINNER is
+     *      credited the full amount, the seller is credited nothing, and the
+     *      token is owed back to the seller through {pendingNft}.
+     *
+     *      Swallowing the failure is still right on the `ReserveNotMet` path:
+     *      there the recipient is the seller, so a seller whose own collection
+     *      refuses the token carries only their own risk, and the bidder must
+     *      not be held hostage to it.
      * @param auctionId The auction.
      * @param auction The auction storage pointer.
      * @param outcome `Settled` or `ReserveNotMet`.
@@ -732,63 +868,99 @@ contract AuctionHouse is ERC721Holder, ReentrancyGuard, Pausable, Ownable2Step {
         uint256 tokenId = auction.tokenId;
 
         uint96 fee = 0;
-        address nftRecipient;
 
         if (outcome == Status.Settled) {
-            address recipient = feeRecipient;
-            uint16 bps = platformFeeBps;
-            if (recipient != address(0) && bps != 0) {
-                // Rounds down, so the dust stays with the seller (invariant 6).
-                fee = uint96((amount * bps) / BPS_DENOMINATOR);
+            // --- Interaction FIRST, because it decides who gets paid. ---
+            if (_tryTransferNft(nft, tokenId, winner)) {
+                address recipient = feeRecipient;
+                // The fee as it stood when this auction opened, not as it stands
+                // now: the owner cannot reprice an auction that already ran.
+                uint16 bps = auction.platformFeeBps;
+                if (recipient != address(0) && bps != 0) {
+                    // Rounds down, so the dust stays with the seller (invariant 6).
+                    fee = uint96((amount * bps) / BPS_DENOMINATOR);
+                }
+                uint256 sellerProceeds = amount - fee;
+
+                if (fee != 0) _credit(recipient, auctionId, fee);
+                // Credited, never sent. A contract seller is paid exactly the way
+                // an account is, so a smart-wallet seller can never be locked out.
+                if (sellerProceeds != 0) _credit(seller, auctionId, sellerProceeds);
+            } else {
+                // Undelivered, so the sale is void. The winner is made whole to
+                // the wei and the seller is credited nothing at all.
+                outcome = Status.DeliveryFailed;
+                auction.status = outcome;
+                if (amount != 0) _credit(winner, auctionId, amount);
+                // The winner already has their money back, so handing them the
+                // token later as well would rob the seller. A void sale returns
+                // the token to the seller, exactly as `ReserveNotMet` does.
+                _releaseNft(auctionId, nft, tokenId, seller);
             }
-            uint256 sellerProceeds = amount - fee;
-
-            if (fee != 0) _credit(recipient, auctionId, fee);
-            // Credited, never sent. A contract seller is paid exactly the way an
-            // account is, so a smart-wallet seller can never be locked out.
-            if (sellerProceeds != 0) _credit(seller, auctionId, sellerProceeds);
-
-            nftRecipient = winner;
         } else {
             // Reserve not met, or no bids at all. The bidder gets every wei back.
             if (winner != address(0) && amount != 0) {
                 _credit(winner, auctionId, amount);
             }
-            nftRecipient = seller;
+            // --- Interaction. A failure here is the seller's own risk. ---
+            _releaseNft(auctionId, nft, tokenId, seller);
         }
 
         emit AuctionSettled(
             auctionId,
-            outcome == Status.Settled ? winner : address(0),
+            outcome == Status.ReserveNotMet ? address(0) : winner,
             seller,
             uint96(amount),
             fee,
             outcome
         );
-
-        // --- Interaction, last, and it cannot undo any of the above. ---
-        _releaseNft(auctionId, nft, tokenId, nftRecipient);
     }
 
     /**
-     * @notice Hands the escrowed NFT to `to`.
-     * @dev
-     *      `transferFrom` is used instead of `safeTransferFrom` on purpose: a
-     *      contract recipient that reverts inside `onERC721Received` MUST NOT be
-     *      able to block a settlement that has already moved everyone's money.
-     *      The `try` wrapper covers a hostile ERC-721 for the same reason.
-     * @param auctionId The auction, for the failure event.
+     * @notice Hands the escrowed NFT to `to`, and records the failure if it
+     *         will not move.
+     * @dev A failed handover is written to {pendingNft}, which is what makes it
+     *      recoverable with {claimNft}. Without that record the token was
+     *      stranded forever, because the auction is already terminal.
+     * @param auctionId The auction, for the record and the failure event.
      * @param nft The ERC-721 contract.
      * @param tokenId The token id.
      * @param to The recipient.
      */
     function _releaseNft(uint256 auctionId, address nft, uint256 tokenId, address to) private {
-        // Prevents a malicious bidder or NFT contract from blocking the auction.
-        // solhint-disable-next-line no-empty-blocks
-        try IERC721(nft).transferFrom(address(this), to, tokenId) {
-            return;
-        } catch {
+        if (!_tryTransferNft(nft, tokenId, to)) {
+            pendingNft[auctionId] = to;
             emit NftReleaseFailed(auctionId, to, nft, tokenId);
+        }
+    }
+
+    /**
+     * @notice Attempts the token handover and reports whether it really landed.
+     * @dev
+     *      `transferFrom` is used instead of `safeTransferFrom` on purpose: a
+     *      contract recipient that reverts inside `onERC721Received` MUST NOT be
+     *      able to block a settlement. The `try` wrapper covers a hostile
+     *      ERC-721 for the same reason.
+     *
+     *      The ownership re-check is what makes the return value trustworthy. A
+     *      fake ERC-721 can accept `transferFrom` without moving anything, and a
+     *      silent no-op MUST NOT be read as a delivery, because the caller pays
+     *      the seller on the strength of it. A collection whose `ownerOf` also
+     *      lies is outside what any escrow can prove.
+     * @param nft The ERC-721 contract.
+     * @param tokenId The token id.
+     * @param to The recipient.
+     * @return True when `to` holds the token afterwards.
+     */
+    function _tryTransferNft(address nft, uint256 tokenId, address to) private returns (bool) {
+        try IERC721(nft).transferFrom(address(this), to, tokenId) {
+            try IERC721(nft).ownerOf(tokenId) returns (address owner) {
+                return owner == to;
+            } catch {
+                return false;
+            }
+        } catch {
+            return false;
         }
     }
 

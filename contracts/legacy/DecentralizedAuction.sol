@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: MIT
+// This file is the original auction contract, kept only as a reference for
+// `make audit`, which compares it against the current contract with
+// Slither. It is not compiled, not deployed, and not used by the
+// application. It contains known critical vulnerabilities and MUST NOT be
+// used for anything else.
 pragma solidity ^0.8.0;
 
 contract DecentralizedAuction {
