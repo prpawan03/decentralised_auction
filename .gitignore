@@ -90,3 +90,8 @@ desktop.ini
 tmp/
 temp/
 *.tmp
+
+# Static analysis reports. Regenerate them with `make audit`.
+docs/audit/
+*.sarif
+crytic-export/
