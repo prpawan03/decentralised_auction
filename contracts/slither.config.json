@@ -1,0 +1,11 @@
+{
+  "detectors_to_exclude": "naming-convention,solc-version,pragma",
+  "filter_paths": "node_modules|test",
+  "exclude_informational": false,
+  "exclude_low": false,
+  "solc_remaps": [
+    "@openzeppelin/=../node_modules/@openzeppelin/",
+    "forge-std/=../node_modules/forge-std/src/"
+  ],
+  "hardhat_ignore_compile": false
+}

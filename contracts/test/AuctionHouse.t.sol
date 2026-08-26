@@ -1,0 +1,648 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.36;
+
+import {AuctionHouseBase} from "./AuctionHouseBase.t.sol";
+import {AuctionHouse} from "../src/AuctionHouse.sol";
+
+/**
+ * @title AuctionHouseTest
+ * @notice Unit and fuzz coverage of the auction lifecycle.
+ * @dev Fuzz cases live here rather than in the TypeScript suite, because this
+ *      is the only runner that can drive a Solidity fuzzer.
+ */
+contract AuctionHouseTest is AuctionHouseBase {
+    // =====================================================================
+    // createAuction
+    // =====================================================================
+
+    function test_CreateAuction_EscrowsNftAndOpensLive() public {
+        (uint256 id, uint256 tokenId) = _listSimple(seller);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.seller, seller);
+        assertEq(auction.nft, address(nft));
+        assertEq(auction.tokenId, tokenId);
+        assertEq(uint8(auction.status), uint8(AuctionHouse.Status.Live));
+        assertEq(auction.startTime, uint64(START_TIME));
+        assertEq(auction.endTime, uint64(START_TIME + 1 hours));
+        assertEq(auction.minIncrementBps, house.DEFAULT_INCREMENT_BPS());
+        assertEq(auction.extensionCount, 0);
+
+        // Invariant 4 at listing time: the house holds the token, not the seller.
+        assertEq(nft.ownerOf(tokenId), address(house));
+        assertEq(house.totalAuctions(), 1);
+    }
+
+    function test_RevertWhen_DurationBelowMinimum() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        // Read the constants BEFORE the prank: an external call in between
+        // would consume it and the revert would come from the wrong caller.
+        uint64 minDuration = house.MIN_DURATION();
+        uint64 maxDuration = house.MAX_DURATION();
+
+        vm.prank(seller);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.DurationOutOfRange.selector, uint64(59), minDuration, maxDuration)
+        );
+        house.createAuction(address(nft), tokenId, 0, 0, 59);
+    }
+
+    function test_RevertWhen_DurationAboveMaximum() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        uint64 minDuration = house.MIN_DURATION();
+        uint64 maxDuration = house.MAX_DURATION();
+        uint64 tooLong = maxDuration + 1;
+
+        vm.prank(seller);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.DurationOutOfRange.selector, tooLong, minDuration, maxDuration)
+        );
+        house.createAuction(address(nft), tokenId, 0, 0, tooLong);
+    }
+
+    function test_RevertWhen_BuyNowIsBelowReserve() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        vm.prank(seller);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidBuyNowPrice.selector, uint96(1 ether), uint96(2 ether)));
+        house.createAuction(address(nft), tokenId, 2 ether, 1 ether, 1 hours);
+    }
+
+    function test_RevertWhen_BuyNowIsBelowMinIncrement() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        uint96 dust = house.MIN_INCREMENT() - 1;
+        vm.prank(seller);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidBuyNowPrice.selector, dust, uint96(0)));
+        house.createAuction(address(nft), tokenId, 0, dust, 1 hours);
+    }
+
+    function test_RevertWhen_AuctionIdDoesNotExist() public {
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.AuctionNotFound.selector, uint256(7)));
+        house.getAuction(7);
+    }
+
+    // =====================================================================
+    // bid
+    // =====================================================================
+
+    function test_Bid_CreditsThePreviousBidderAndNeverSends() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        uint256 aliceBalanceBefore = alice.balance;
+
+        vm.prank(bob);
+        house.bid{value: 2 ether}(id);
+
+        // Rule 1: the refund is credited, not sent. Alice's wallet is untouched.
+        assertEq(alice.balance, aliceBalanceBefore, "ETH was pushed to the outbid account");
+        assertEq(house.pendingReturns(alice), 1 ether);
+        assertEq(house.getAuction(id).highestBidder, bob);
+        assertEq(house.getAuction(id).highestBid, 2 ether);
+        // Rule 7: the escrow tracks only this auction's live bid.
+        assertEq(house.escrowOf(id), 2 ether);
+        assertEq(address(house).balance, 3 ether);
+        _assertSolvent();
+    }
+
+    function test_RevertWhen_BidBelowMinimumIncrement() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        // 5% of 1 ether is the required step, so 1.04 ether must fail.
+        uint256 required = house.minimumBid(id);
+        assertEq(required, 1.05 ether);
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BidTooLow.selector, required, uint256(1.04 ether)));
+        house.bid{value: 1.04 ether}(id);
+    }
+
+    function test_RevertWhen_BidLandsAtEndTime() public {
+        (uint256 id, ) = _listSimple(seller);
+        // Invariant 3: at endTime, bidding is already closed.
+        vm.warp(START_TIME + 1 hours);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.AuctionAlreadyEnded.selector, id));
+        house.bid{value: 1 ether}(id);
+    }
+
+    function test_RevertWhen_LeaderBidsAgainstThemselves() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        vm.prank(alice);
+        vm.expectRevert(AuctionHouse.AlreadyHighestBidder.selector);
+        house.bid{value: 2 ether}(id);
+    }
+
+    function test_HighestBidNeverDecreases() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        uint256 previous = 0;
+        address[3] memory bidders = [alice, bob, carol];
+        for (uint256 i = 0; i < bidders.length; ++i) {
+            _bidMinimum(bidders[i], id);
+            uint256 current = house.getAuction(id).highestBid;
+            // Invariant 2.
+            assertGt(current, previous, "invariant 2: highestBid decreased");
+            previous = current;
+        }
+    }
+
+    function test_MinimumBid_StartsAtMinIncrement() public {
+        (uint256 id, ) = _list(seller, 5 ether, 0, 1 hours);
+        // The reserve is not a bid floor. A bid below it is legal and refundable.
+        assertEq(house.minimumBid(id), house.MIN_INCREMENT());
+    }
+
+    // =====================================================================
+    // Anti-snipe
+    // =====================================================================
+
+    function test_AntiSnipe_ExtendsEndTime() public {
+        (uint256 id, ) = _list(seller, 0, 0, 1 hours);
+        uint256 snipeAt = START_TIME + 1 hours - 30;
+        vm.warp(snipeAt);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.endTime, uint64(snipeAt + house.ANTI_SNIPE_WINDOW()));
+        assertEq(auction.extensionCount, 1);
+    }
+
+    function test_AntiSnipe_DoesNotExtendAnEarlyBid() public {
+        (uint256 id, ) = _list(seller, 0, 0, 1 hours);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.endTime, uint64(START_TIME + 1 hours));
+        assertEq(auction.extensionCount, 0);
+    }
+
+    function test_AntiSnipe_StopsAtMaxExtensions() public {
+        // A one minute auction sits entirely inside the anti-snipe window, so
+        // every bid extends it.
+        (uint256 id, ) = _list(seller, 0, 0, 60);
+
+        uint32 cap = house.MAX_EXTENSIONS();
+        for (uint256 i = 0; i < cap + 3; ++i) {
+            address bidder = i % 2 == 0 ? alice : bob;
+            vm.warp(house.getAuction(id).endTime - 1);
+            _bidMinimum(bidder, id);
+            // Invariant 5, checked on every single step.
+            assertLe(house.getAuction(id).extensionCount, cap, "invariant 5: extension cap breached");
+        }
+
+        assertEq(house.getAuction(id).extensionCount, cap);
+
+        // Past the cap the clock no longer moves, so the auction terminates.
+        uint64 frozenEnd = house.getAuction(id).endTime;
+        vm.warp(frozenEnd - 1);
+        _bidMinimum(carol, id);
+        assertEq(house.getAuction(id).endTime, frozenEnd, "a capped auction was extended again");
+    }
+
+    // =====================================================================
+    // buyNow
+    // =====================================================================
+
+    function test_BuyNow_SettlesImmediately() public {
+        (uint256 id, uint256 tokenId) = _list(seller, 1 ether, 5 ether, 1 hours);
+
+        vm.prank(alice);
+        house.buyNow{value: 5 ether}(id);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(uint8(auction.status), uint8(AuctionHouse.Status.Settled));
+        assertEq(auction.highestBidder, alice);
+        // Invariant 4.
+        assertEq(nft.ownerOf(tokenId), alice);
+
+        uint256 fee = (5 ether * FEE_BPS) / 10_000;
+        assertEq(house.pendingReturns(feeSink), fee);
+        assertEq(house.pendingReturns(seller), 5 ether - fee);
+        assertEq(house.escrowOf(id), 0);
+        _assertSolvent();
+    }
+
+    function test_BuyNow_RefundsTheStandingBidder() public {
+        (uint256 id, ) = _list(seller, 0, 5 ether, 1 hours);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        vm.prank(bob);
+        house.buyNow{value: 5 ether}(id);
+
+        assertEq(house.pendingReturns(alice), 1 ether, "the outbid account was not made whole");
+        _assertSolvent();
+    }
+
+    function test_RevertWhen_BuyNowPaymentIsWrong() public {
+        (uint256 id, ) = _list(seller, 0, 5 ether, 1 hours);
+
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.IncorrectPayment.selector, uint256(5 ether), uint256(4 ether))
+        );
+        house.buyNow{value: 4 ether}(id);
+    }
+
+    function test_RevertWhen_BuyNowIsOutrunByBidding() public {
+        (uint256 id, ) = _list(seller, 0, 5 ether, 1 hours);
+
+        vm.prank(alice);
+        house.bid{value: 6 ether}(id);
+
+        // Buy-now closes once bidding passes it, so nobody can take the item
+        // for less than the standing bid.
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BuyNowDisabled.selector, id));
+        house.buyNow{value: 5 ether}(id);
+    }
+
+    // =====================================================================
+    // settle
+    // =====================================================================
+
+    function test_Settle_PaysSellerAndFeeExactly() public {
+        (uint256 id, uint256 tokenId) = _list(seller, 1 ether, 0, 1 hours);
+
+        vm.prank(alice);
+        house.bid{value: 3 ether}(id);
+        vm.warp(START_TIME + 1 hours);
+
+        house.settle(id);
+
+        uint256 fee = house.pendingReturns(feeSink);
+        uint256 proceeds = house.pendingReturns(seller);
+        // Invariant 6: the split is exact, and the dust stays with the seller.
+        assertEq(fee + proceeds, 3 ether, "invariant 6: the split lost or created wei");
+        assertEq(fee, (3 ether * FEE_BPS) / 10_000);
+        assertEq(nft.ownerOf(tokenId), alice);
+        assertEq(house.escrowOf(id), 0);
+        _assertSolvent();
+    }
+
+    function test_Settle_BelowReserveRefundsInFullAndReturnsTheNft() public {
+        (uint256 id, uint256 tokenId) = _list(seller, 10 ether, 0, 1 hours);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+        vm.warp(START_TIME + 1 hours);
+
+        house.settle(id);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(uint8(auction.status), uint8(AuctionHouse.Status.ReserveNotMet));
+        assertEq(house.pendingReturns(alice), 1 ether, "the bidder was not refunded in full");
+        assertEq(house.pendingReturns(seller), 0);
+        assertEq(house.pendingReturns(feeSink), 0);
+        // Invariant 4.
+        assertEq(nft.ownerOf(tokenId), seller);
+        _assertSolvent();
+    }
+
+    function test_Settle_WithNoBidsReturnsTheNft() public {
+        (uint256 id, uint256 tokenId) = _listSimple(seller);
+        vm.warp(START_TIME + 1 hours);
+
+        house.settle(id);
+
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.ReserveNotMet));
+        assertEq(nft.ownerOf(tokenId), seller);
+    }
+
+    function test_RevertWhen_SettlingBeforeEndTime() public {
+        (uint256 id, ) = _listSimple(seller);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.AuctionStillRunning.selector, id, uint64(START_TIME + 1 hours))
+        );
+        house.settle(id);
+    }
+
+    function test_RevertWhen_SettlingTwice() public {
+        (uint256 id, ) = _listSimple(seller);
+        vm.warp(START_TIME + 1 hours);
+        house.settle(id);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.AuctionNotLive.selector, id, AuctionHouse.Status.ReserveNotMet)
+        );
+        house.settle(id);
+    }
+
+    function test_IsSettleable_TracksTheClock() public {
+        (uint256 id, ) = _listSimple(seller);
+        assertFalse(house.isSettleable(id));
+        vm.warp(START_TIME + 1 hours);
+        assertTrue(house.isSettleable(id));
+        house.settle(id);
+        assertFalse(house.isSettleable(id));
+        // A missing auction is never settleable, and never reverts here.
+        assertFalse(house.isSettleable(999));
+    }
+
+    // =====================================================================
+    // cancelAuction
+    // =====================================================================
+
+    function test_Cancel_ReturnsTheNftWhenThereAreNoBids() public {
+        (uint256 id, uint256 tokenId) = _listSimple(seller);
+
+        vm.prank(seller);
+        house.cancelAuction(id);
+
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.Cancelled));
+        assertEq(nft.ownerOf(tokenId), seller);
+    }
+
+    function test_RevertWhen_CancellingWithAStandingBid() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+
+        vm.prank(seller);
+        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        house.cancelAuction(id);
+    }
+
+    function test_RevertWhen_NonSellerCancels() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NotSeller.selector, alice, seller));
+        house.cancelAuction(id);
+    }
+
+    // =====================================================================
+    // withdraw
+    // =====================================================================
+
+    function test_Withdraw_PaysOnceAndZeroesTheCredit() public {
+        (uint256 id, ) = _listSimple(seller);
+
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+        vm.prank(bob);
+        house.bid{value: 2 ether}(id);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        uint256 paid = house.withdraw();
+
+        assertEq(paid, 1 ether);
+        assertEq(alice.balance, before + 1 ether);
+        assertEq(house.pendingReturns(alice), 0);
+
+        vm.prank(alice);
+        vm.expectRevert(AuctionHouse.NothingToWithdraw.selector);
+        house.withdraw();
+    }
+
+    function test_RevertWhen_WithdrawingWithNoCredit() public {
+        vm.prank(stranger);
+        vm.expectRevert(AuctionHouse.NothingToWithdraw.selector);
+        house.withdraw();
+    }
+
+    // =====================================================================
+    // Pausing (invariant 7)
+    // =====================================================================
+
+    function test_Pause_BlocksBiddingButNeverTrapsMoney() public {
+        (uint256 id, ) = _listSimple(seller);
+        vm.prank(alice);
+        house.bid{value: 1 ether}(id);
+        vm.prank(bob);
+        house.bid{value: 2 ether}(id);
+
+        vm.prank(houseOwner);
+        house.pause();
+
+        vm.prank(carol);
+        vm.expectRevert();
+        house.bid{value: 3 ether}(id);
+
+        // Invariant 7: settle and withdraw MUST keep working while paused.
+        vm.warp(START_TIME + 1 hours);
+        house.settle(id);
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.Settled));
+
+        vm.prank(alice);
+        assertEq(house.withdraw(), 1 ether);
+        vm.prank(seller);
+        assertGt(house.withdraw(), 0);
+
+        vm.prank(houseOwner);
+        house.unpause();
+    }
+
+    // =====================================================================
+    // Admin
+    // =====================================================================
+
+    function test_RevertWhen_FeeExceedsTheHardCap() public {
+        uint16 cap = house.MAX_FEE_BPS();
+        uint16 tooMuch = cap + 1;
+
+        vm.prank(houseOwner);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.FeeTooHigh.selector, tooMuch, cap));
+        house.setPlatformFee(tooMuch);
+    }
+
+    function test_SetPlatformFee() public {
+        vm.prank(houseOwner);
+        house.setPlatformFee(1000);
+        assertEq(house.platformFeeBps(), 1000);
+    }
+
+    function test_RevertWhen_NonOwnerSetsFee() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        house.setPlatformFee(100);
+    }
+
+    function test_ZeroFeeRecipientDisablesTheFee() public {
+        vm.prank(houseOwner);
+        house.setFeeRecipient(address(0));
+
+        (uint256 id, ) = _listSimple(seller);
+        vm.prank(alice);
+        house.bid{value: 4 ether}(id);
+        vm.warp(START_TIME + 1 hours);
+        house.settle(id);
+
+        // Nothing is credited to address(0), so no wei is ever stranded.
+        assertEq(house.pendingReturns(address(0)), 0);
+        assertEq(house.pendingReturns(seller), 4 ether);
+    }
+
+    function test_OwnershipTransferIsTwoStep() public {
+        vm.prank(houseOwner);
+        house.transferOwnership(alice);
+        // Still the old owner until the new one accepts.
+        assertEq(house.owner(), houseOwner);
+        assertEq(house.pendingOwner(), alice);
+
+        vm.prank(alice);
+        house.acceptOwnership();
+        assertEq(house.owner(), alice);
+    }
+
+    // =====================================================================
+    // Pagination
+    // =====================================================================
+
+    function test_GetAuctions_ClampsInsteadOfReverting() public {
+        for (uint256 i = 0; i < 5; ++i) {
+            _listSimple(seller);
+        }
+
+        // A limit above MAX_PAGE_SIZE is clamped, not rejected.
+        assertEq(house.getAuctions(0, 10_000).length, 5);
+        assertEq(house.getAuctions(2, 2).length, 2);
+        // An offset past the end returns an empty page.
+        assertEq(house.getAuctions(99, 10).length, 0);
+    }
+
+    // =====================================================================
+    // Fuzz
+    // =====================================================================
+
+    /// @dev Fuzzes bid() across the full range the uint96 field can hold.
+    function testFuzz_BidAcceptsAnyValueAtOrAboveTheMinimum(uint96 amount) public {
+        (uint256 id, ) = _listSimple(seller);
+        amount = uint96(bound(amount, house.MIN_INCREMENT(), type(uint96).max));
+
+        vm.deal(alice, amount);
+        vm.prank(alice);
+        house.bid{value: amount}(id);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.highestBid, amount, "the stored bid does not match the value sent");
+        assertEq(auction.highestBidder, alice);
+        assertEq(house.escrowOf(id), amount);
+        assertEq(address(house).balance, amount);
+        _assertSolvent();
+    }
+
+    /// @dev Fuzzes bid() below the minimum. Every case MUST be rejected.
+    function testFuzz_RevertWhen_BidIsBelowTheMinimum(uint96 amount) public {
+        (uint256 id, ) = _listSimple(seller);
+        uint256 floor = house.MIN_INCREMENT();
+        amount = uint96(bound(amount, 0, floor - 1));
+
+        vm.deal(alice, uint256(amount) + 1 ether);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BidTooLow.selector, floor, uint256(amount)));
+        house.bid{value: amount}(id);
+    }
+
+    /// @dev Fuzzes a two-bid sequence. The escrow MUST follow the leader exactly.
+    function testFuzz_OutbiddingMovesEscrowIntoPendingReturns(uint96 first, uint96 extra) public {
+        (uint256 id, ) = _listSimple(seller);
+
+        first = uint96(bound(first, house.MIN_INCREMENT(), 1_000 ether));
+        vm.deal(alice, first);
+        vm.prank(alice);
+        house.bid{value: first}(id);
+
+        uint256 required = house.minimumBid(id);
+        uint256 second = required + bound(extra, 0, 1_000 ether);
+        vm.deal(bob, second);
+        vm.prank(bob);
+        house.bid{value: second}(id);
+
+        assertEq(house.pendingReturns(alice), first, "the outbid amount was not credited in full");
+        assertEq(house.escrowOf(id), second);
+        assertEq(address(house).balance, uint256(first) + second);
+        _assertSolvent();
+    }
+
+    /// @dev Fuzzes createAuction across every legal duration and price.
+    function testFuzz_CreateAuctionAcceptsTheWholeLegalRange(
+        uint64 duration,
+        uint96 reserve,
+        uint96 buyNowSeed
+    ) public {
+        duration = uint64(bound(duration, house.MIN_DURATION(), house.MAX_DURATION()));
+        reserve = uint96(bound(reserve, 0, 1_000 ether));
+
+        uint96 floor = reserve > house.MIN_INCREMENT() ? reserve : house.MIN_INCREMENT();
+        uint96 buyNow = uint96(bound(buyNowSeed, floor, uint256(floor) + 1_000 ether));
+
+        uint256 tokenId = _mintAndApprove(seller);
+        vm.prank(seller);
+        uint256 id = house.createAuction(address(nft), tokenId, reserve, buyNow, duration);
+
+        AuctionHouse.Auction memory auction = house.getAuction(id);
+        assertEq(auction.reservePrice, reserve);
+        assertEq(auction.buyNowPrice, buyNow);
+        assertEq(auction.endTime - auction.startTime, duration);
+        assertEq(house.timeRemaining(id), duration);
+        assertEq(nft.ownerOf(tokenId), address(house));
+    }
+
+    /// @dev Fuzzes createAuction outside the legal duration range.
+    function testFuzz_RevertWhen_DurationIsOutOfRange(uint64 duration) public {
+        uint64 minDuration = house.MIN_DURATION();
+        uint64 maxDuration = house.MAX_DURATION();
+        vm.assume(duration < minDuration || duration > maxDuration);
+        uint256 tokenId = _mintAndApprove(seller);
+
+        vm.prank(seller);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.DurationOutOfRange.selector, duration, minDuration, maxDuration)
+        );
+        house.createAuction(address(nft), tokenId, 0, 0, duration);
+    }
+
+    /// @dev Invariant 6 as a fuzz case: the split is exact at every fee and price.
+    function testFuzz_FeeSplitIsExact(uint96 winningBid, uint16 feeBps) public {
+        winningBid = uint96(bound(winningBid, house.MIN_INCREMENT(), 10_000 ether));
+        feeBps = uint16(bound(feeBps, 0, house.MAX_FEE_BPS()));
+
+        vm.prank(houseOwner);
+        house.setPlatformFee(feeBps);
+
+        (uint256 id, ) = _listSimple(seller);
+        vm.deal(alice, winningBid);
+        vm.prank(alice);
+        house.bid{value: winningBid}(id);
+
+        vm.warp(START_TIME + 1 hours);
+        house.settle(id);
+
+        uint256 fee = house.pendingReturns(feeSink);
+        uint256 proceeds = house.pendingReturns(seller);
+        assertEq(fee, (uint256(winningBid) * feeBps) / 10_000, "the fee was not rounded down");
+        assertEq(fee + proceeds, winningBid, "invariant 6: the split is not exact");
+        _assertSolvent();
+    }
+
+    /// @dev The minimum bid always clears the current leader by at least the floor.
+    function testFuzz_MinimumBidAlwaysBeatsTheLeader(uint96 amount) public {
+        (uint256 id, ) = _listSimple(seller);
+        amount = uint96(bound(amount, house.MIN_INCREMENT(), 100_000 ether));
+
+        vm.deal(alice, amount);
+        vm.prank(alice);
+        house.bid{value: amount}(id);
+
+        uint256 next = house.minimumBid(id);
+        assertGe(next, uint256(amount) + house.MIN_INCREMENT(), "the step fell below the floor");
+    }
+}
