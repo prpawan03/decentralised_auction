@@ -21,7 +21,7 @@ NPM          ?= npm
 .SHELLFLAGS := -eu -c
 .DEFAULT_GOAL := help
 
-.PHONY: help setup up watch down clean logs deploy seed test lint fmt prod smoke reset-chain
+.PHONY: help setup up watch down clean logs deploy seed test lint fmt prod smoke reset-chain audit
 
 ## ---------------------------------------------------------------------------
 ## Help
@@ -110,3 +110,15 @@ fmt: ## Format the code in place
 
 smoke: ## Check that a running stack answers correctly
 	node scripts/smoke.mjs
+
+audit: ## Run Slither on both contracts and print a before/after comparison
+	@mkdir -p docs/audit
+	@echo "Analysing the original contract ..."
+	@python -m slither backend/contracts/DecentralizedAuction.sol --solc-solcs-select 0.8.36 --checklist --markdown-root . > docs/audit/slither-before.md 2>/dev/null || true
+	@echo "Analysing the current contract ..."
+	@python -m slither contracts/src/AuctionHouse.sol --solc-solcs-select 0.8.36 --solc-remaps "@openzeppelin/=node_modules/@openzeppelin/" --checklist --markdown-root . > docs/audit/slither-after.md 2>/dev/null || true
+	@echo ""
+	@echo "detector impact counts   before  after"
+	@for lvl in High Medium Low Informational; do echo "  $$lvl: $$(grep -c ^Impact:.$$lvl docs/audit/slither-before.md 2>/dev/null || true) -> $$(grep -c ^Impact:.$$lvl docs/audit/slither-after.md 2>/dev/null || true)"; done
+	@echo ""
+	@echo "Reports are in docs/audit/. Git does not track them."

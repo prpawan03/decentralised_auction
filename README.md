@@ -151,6 +151,38 @@ named after it.
 | No deadline existed | High | `endTime` is required, with anti-snipe extension |
 | The winner received nothing | Critical | ERC-721 escrow, released atomically with settlement |
 
+### Measured, not asserted
+
+Run `make audit` to reproduce this. It runs [Slither](https://github.com/crytic/slither)
+0.11.6 against both contracts with the same compiler.
+
+| | Original contract | This contract |
+| --- | --- | --- |
+| High impact | **1** (`reentrancy-eth`) | **0** |
+| Medium impact | 0 | 0 |
+| Low impact | 1 | 2 |
+| Informational | 5 | 6 |
+| Reentrancy detectors that fire | **3** | **0** |
+
+The test suite is the other half of the evidence:
+
+```
+92 tests passing
+├── 68 Solidity
+│   ├── fuzz tests at 512 runs each
+│   ├── 7 invariants at 128 runs x depth 24
+│   └── 18 regression tests, each named after the bug it closes
+└── 24 TypeScript integration tests
+```
+
+The regression tests use real attacker contracts, not mocks of the idea:
+`ReentrantBidder`, `RevertingReceiver`, `SmartWalletSeller` and `HostileNFT`.
+Each one performs the actual documented exploit and asserts that it now fails.
+
+The invariant that matters most is `invariant_HouseHoldsAtLeastWhatItOwes`: for
+any sequence of calls the fuzzer can produce, the contract balance always
+covers the sum of pending refunds and active bids.
+
 **This code is not audited.** It is a demonstration project for a local
 network. Do **not** deploy it to a public network or use it with real funds.
 See [SECURITY.md](SECURITY.md).
