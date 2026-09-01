@@ -1,5 +1,16 @@
 # ---------------------------------------------------------------------------
-# nginx server for the production web bundle.
+# nginx server for the production web bundle. THIS IS A TEMPLATE.
+#
+# docker/web-entrypoint.d/05-nginx-config.sh runs envsubst over this file at
+# container start and writes the result to /etc/nginx/conf.d/default.conf,
+# which compose mounts as a tmpfs. Same pattern as the site bundle: the image
+# stays read-only, and one generated file reaches nginx.
+#
+# ONLY the variables named in that script's envsubst call are substituted.
+# Every other `$name` in this file — $uri, $auction_cache_control — is an nginx
+# variable and survives untouched. Adding a new placeholder here therefore
+# means adding it to the envsubst list there as well, or it will reach nginx
+# as a literal.
 #
 # The base image is nginx-unprivileged. That image runs as user 101 and it
 # listens on port 8080. A port below 1024 needs root, so do not change 8080.
@@ -68,7 +79,24 @@ server {
     # `connect-src` MUST allow the local JSON-RPC endpoint. `script-src`
     # allows 'unsafe-inline' because a wallet extension injects its own
     # script. Make this policy stricter before any public deployment.
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:8545 http://localhost:8545 ws://127.0.0.1:8545 ws://localhost:8545; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    #
+    # TWO DIRECTIVES ARE OPERATOR-CONFIGURABLE, because both depend on where
+    # the tokens being auctioned keep their metadata, which this image cannot
+    # know at build time:
+    #
+    #   img-src      Token artwork. An ERC-721 may point `tokenURI` at any
+    #                host by design, so the default admits https: broadly.
+    #                Images are inert — they execute nothing — and
+    #                Referrer-Policy: no-referrer above, plus referrerpolicy
+    #                on every <img>, stops the fetch disclosing which page
+    #                requested it. Narrow this to your own gateway if you
+    #                control every collection you list.
+    #   connect-src  The metadata JSON fetch, which is a real XHR and a real
+    #                exfiltration channel. The default admits ONLY the local
+    #                JSON-RPC endpoint and the default IPFS gateway. Widen it
+    #                deliberately, and only to the gateway you configured in
+    #                IPFS_GATEWAY.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src ${AUCTION_CSP_IMG_SRC}; font-src 'self' data:; connect-src ${AUCTION_CSP_CONNECT_SRC}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
 
     # --- Health probe ------------------------------------------------------
     # The container health check calls this route.

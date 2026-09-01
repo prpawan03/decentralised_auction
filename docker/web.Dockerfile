@@ -106,9 +106,17 @@ LABEL org.opencontainers.image.title="auction-web" \
 # into the served directory at start time. See docker/web-entrypoint.d/
 # 10-runtime-config.sh for the reason.
 COPY --from=build --chown=101:101 /app/web/dist /opt/site
-COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+
+# The nginx config is stored outside /etc/nginx for the same reason: it names
+# the hosts allowed to serve token artwork, which is a deployment setting, so
+# 05-nginx-config.sh renders it at start time. See that script.
+COPY docker/nginx/default.conf.template /opt/nginx/default.conf.template
+
 # `--chmod` sets the executable bit without a root step and without an extra
 # layer. Git on Windows does not keep that bit, so the Dockerfile MUST set it.
+# The numeric prefixes are the run order: the config must exist before the
+# bundle is staged, and both before nginx starts.
+COPY --chmod=0755 docker/web-entrypoint.d/05-nginx-config.sh /docker-entrypoint.d/05-nginx-config.sh
 COPY --chmod=0755 docker/web-entrypoint.d/10-runtime-config.sh /docker-entrypoint.d/10-runtime-config.sh
 
 EXPOSE 8080

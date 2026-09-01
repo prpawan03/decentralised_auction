@@ -3,6 +3,7 @@ import { useAccount } from "wagmi";
 import type { Address } from "viem";
 import { useParams } from "react-router-dom";
 import { AuctionTable } from "@/features/auctions/AuctionTable";
+import { useNftMetadataMany, type NftRef } from "@/hooks/useNftMetadata";
 import { SettleButton, CancelButton } from "@/features/bidding/AuctionActions";
 import { WithdrawPanel } from "./WithdrawPanel";
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/ui/States";
@@ -73,6 +74,15 @@ export default function PortfolioPage() {
   const { auctions, isInitialLoading, isError, error, refetch } = useAuctions();
   const buckets = useMemo(() => bucket(auctions, subject, now), [auctions, subject, now]);
 
+
+  /* One metadata lookup covering all three tables below. They are slices of
+     the same list, so a per-table hook would issue the same multicall three
+     times. */
+  const refs = useMemo<NftRef[]>(
+    () => auctions.map((a) => ({ nft: a.nft, tokenId: a.tokenId })),
+    [auctions],
+  );
+  const metadata = useNftMetadataMany(refs);
   if (params.address && !routeAddress) {
     return (
       <main id="main" className="mx-auto w-full max-w-3xl px-4 py-12">
@@ -154,6 +164,7 @@ export default function PortfolioPage() {
               auctions={buckets.winning}
               now={now}
               account={connected}
+              metadata={metadata}
               caption="Auctions where this account holds the highest bid"
               renderAction={(a) => <SettleButton auction={a} />}
             />
@@ -169,6 +180,7 @@ export default function PortfolioPage() {
               auctions={buckets.won}
               now={now}
               account={connected}
+              metadata={metadata}
               caption="Settled auctions this account won"
             />
           </Section>
@@ -194,6 +206,7 @@ export default function PortfolioPage() {
               auctions={buckets.listings}
               now={now}
               account={connected}
+              metadata={metadata}
               caption="Auctions listed by this account"
               renderAction={(a) => (
                 <div className="flex justify-end gap-1.5">

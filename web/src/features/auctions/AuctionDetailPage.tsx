@@ -13,6 +13,10 @@ import { ErrorState, TableSkeleton } from "@/components/ui/States";
 import { ButtonLink } from "@/components/ui/Button";
 import { StatusPill, StandingPill } from "./StatusPill";
 import { AntiSnipeExplainer, AntiSnipeBadge } from "./AntiSnipeBadge";
+import { WatchButton } from "./WatchButton";
+import { TokenPanel } from "./TokenPanel";
+import { useNftMetadata } from "@/hooks/useNftMetadata";
+import { fallbackName } from "@/lib/nftMetadata";
 import { BidButton } from "@/features/bidding/BidDialog";
 import { BuyNowButton, SettleButton, CancelButton } from "@/features/bidding/AuctionActions";
 import { ConnectPrompt } from "@/features/wallet/WalletButton";
@@ -46,6 +50,10 @@ export default function AuctionDetailPage() {
     useAuctionDetail(auctionId);
 
   const events = useAuctionActivity(auctionId);
+
+  /* Called before the early returns so the hook order is identical on every
+     render, including the not-found and error paths. */
+  const art = useNftMetadata(auction?.nft, auction?.tokenId);
 
   if (auctionId === undefined) {
     return (
@@ -127,13 +135,18 @@ export default function AuctionDetailPage() {
           <h1 className="text-xl font-semibold text-[var(--color-ink)]">
             <span className="tnum">#{auction.id.toString()}</span>
             <span className="mx-2 text-[var(--color-ink-3)]">·</span>
-            Token #{auction.tokenId.toString()}
+            {/* The metadata name when the token has one. It is off-chain and
+                seller-controlled, so the auction number stays in front of it:
+                the id is what identifies the sale. */}
+            {art.name ?? fallbackName(auction.tokenId)}
           </h1>
-          <p className="tnum mt-1 truncate text-[0.75rem] text-[var(--color-ink-3)]">
-            Collection {auction.nft}
+          <p className="mt-1 truncate text-[0.75rem] text-[var(--color-ink-3)]">
+            {art.collection !== undefined ? `${art.collection} · ` : "Collection "}
+            <span className="tnum">{auction.nft}</span>
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <WatchButton auctionId={auction.id} />
           <StatusPill auction={auction} now={now} />
           <StandingPill auction={auction} account={address} now={now} />
           <AntiSnipeBadge auction={auction} />
@@ -270,8 +283,11 @@ export default function AuctionDetailPage() {
           </div>
         </div>
 
+        <div className="flex min-w-0 flex-col gap-5 self-start">
+        <TokenPanel nft={auction.nft} tokenId={auction.tokenId} />
+
         {/* This auction's own event stream. */}
-        <aside aria-labelledby="auction-activity-heading" className="panel min-w-0 self-start">
+        <aside aria-labelledby="auction-activity-heading" className="panel min-w-0">
           <header className="border-b border-[var(--color-line)] px-4 py-3">
             <h2 id="auction-activity-heading" className="text-sm font-semibold text-[var(--color-ink)]">
               This auction
@@ -316,6 +332,7 @@ export default function AuctionDetailPage() {
             </ol>
           )}
         </aside>
+        </div>
       </div>
     </main>
   );

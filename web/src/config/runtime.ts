@@ -1,6 +1,7 @@
 import type { Address } from "viem";
 import { isAddress } from "viem";
 import deployment from "@/deployments/31337.json";
+import { DEFAULT_IPFS_GATEWAY } from "@/lib/nftMetadata";
 
 /**
  * Runtime configuration, resolved in exactly this order:
@@ -25,6 +26,12 @@ export interface AuctionConfig {
   blockExplorerUrl?: string;
   /** WalletConnect project id. Optional: a local demo has no reason to need one. */
   walletConnectProjectId?: string;
+  /**
+   * Where `ipfs://` metadata is rewritten to. Configurable because a public
+   * gateway is a third party that sees every token a viewer looks at, and an
+   * operator running their own node should be able to point at it.
+   */
+  ipfsGateway: string;
   /** Which layer actually supplied the values. Surfaced in the diagnostics panel. */
   source: "runtime" | "env" | "default";
 }
@@ -43,6 +50,7 @@ const DEFAULTS = {
   rpcUrl: "http://127.0.0.1:8545",
   auctionHouseAddress: deployment.auctionHouse as Address,
   demoNftAddress: deployment.demoNft as Address,
+  ipfsGateway: DEFAULT_IPFS_GATEWAY,
 } as const;
 
 function readRuntime(): Record<string, unknown> {
@@ -67,6 +75,7 @@ function readEnv(): Record<string, unknown> {
     ["demoNftAddress", e.VITE_DEMO_NFT_ADDRESS],
     ["blockExplorerUrl", e.VITE_BLOCK_EXPLORER_URL],
     ["walletConnectProjectId", e.VITE_WALLETCONNECT_PROJECT_ID],
+    ["ipfsGateway", e.VITE_IPFS_GATEWAY],
   ];
   return Object.fromEntries(entries.filter(([, v]) => v !== undefined && String(v).trim() !== ""));
 }
@@ -123,6 +132,9 @@ function build(): AuctionConfig {
     ...(typeof wcProjectId === "string" && wcProjectId !== ""
       ? { walletConnectProjectId: wcProjectId }
       : {}),
+    /* Always trailing-slashed, so callers can concatenate a CID without
+       having to care how the operator wrote the value. */
+    ipfsGateway: asString(pick("ipfsGateway"), DEFAULTS.ipfsGateway).replace(/\/?$/, "/"),
     source,
   };
 }

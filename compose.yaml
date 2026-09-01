@@ -200,6 +200,14 @@ services:
       # Both are optional. web/src/config/runtime.ts drops an empty string.
       BLOCK_EXPLORER_URL: ${BLOCK_EXPLORER_URL:-}
       WALLETCONNECT_PROJECT_ID: ${WALLETCONNECT_PROJECT_ID:-}
+      # Empty falls back to the built-in public gateway.
+      IPFS_GATEWAY: ${IPFS_GATEWAY:-}
+      # The two CSP directives that depend on where token metadata lives.
+      # Empty keeps the defaults in docker/web-entrypoint.d/05-nginx-config.sh.
+      # Change IPFS_GATEWAY and you MUST widen CSP_CONNECT_SRC to match, or the
+      # browser blocks the metadata fetch and every listing shows a placeholder.
+      CSP_IMG_SRC: ${CSP_IMG_SRC:-}
+      CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
     ports:
       # The host port is the same in both modes, so the browser address never
       # changes. The container port differs: 8080 for nginx, 5173 for Vite.
@@ -218,6 +226,10 @@ services:
       - /tmp:mode=1777,size=16m
       - /var/cache/nginx:mode=1777,size=32m
       - /usr/share/nginx/html:mode=1777,size=64m
+      # 05-nginx-config.sh renders default.conf into this directory from the
+      # template baked at /opt/nginx. A tmpfs here is what lets the CSP be a
+      # deployment setting while the image stays read-only.
+      - /etc/nginx/conf.d:mode=1777,size=1m
     stop_grace_period: 5s
     deploy:
       resources:

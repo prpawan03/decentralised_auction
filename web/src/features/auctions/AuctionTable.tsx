@@ -7,6 +7,10 @@ import { AddressChip } from "@/components/ui/AddressChip";
 import { StateStripe, type Tone } from "@/components/ui/Pill";
 import { StatusPill, StandingPill } from "./StatusPill";
 import { AntiSnipeBadge } from "./AntiSnipeBadge";
+import { WatchButton } from "./WatchButton";
+import { NftMedia } from "@/components/ui/NftMedia";
+import { nftKey, type NftView } from "@/hooks/useNftMetadata";
+import { fallbackName } from "@/lib/nftMetadata";
 import {
   buyNowEnabled,
   hasBid,
@@ -50,6 +54,15 @@ export interface AuctionTableProps {
   caption: string;
   /** Hides the caption visually while keeping it for assistive tech. */
   captionHidden?: boolean;
+  /**
+   * Token artwork and names, keyed by {@link nftKey}.
+   *
+   * A PROP, not a hook call. This component stays presentational so it renders
+   * with no wagmi provider at all — which is what src/test/utils.tsx asserts,
+   * and what read-only mode depends on. Omit it and every row shows the
+   * placeholder tile, which is a supported state, not a degraded one.
+   */
+  metadata?: ReadonlyMap<string, NftView> | undefined;
 }
 
 export function AuctionTable({
@@ -59,6 +72,7 @@ export function AuctionTable({
   renderAction,
   caption,
   captionHidden = true,
+  metadata,
 }: AuctionTableProps) {
   return (
     /* The table scrolls inside its own box; the page body never scrolls
@@ -75,6 +89,9 @@ export function AuctionTable({
         </caption>
         <thead>
           <tr className="border-b border-[var(--color-line)]">
+            <th scope="col" className="col-head px-2 py-2">
+              <span className="sr-only">Watch</span>
+            </th>
             <th scope="col" className="col-head px-4 py-2 whitespace-nowrap">
               #
             </th>
@@ -111,6 +128,7 @@ export function AuctionTable({
             const phase = phaseOf(a, now);
             const bid = hasBid(a);
             const met = reserveMet(a);
+            const art = metadata?.get(nftKey(a.nft, a.tokenId));
             return (
               <tr
                 key={a.id.toString()}
@@ -119,6 +137,10 @@ export function AuctionTable({
                   "hover:bg-[var(--color-raised)] focus-within:bg-[var(--color-raised)]",
                 )}
               >
+                <td className="px-2 py-3 align-middle">
+                  <WatchButton auctionId={a.id} />
+                </td>
+
                 {/* Row-state stripe: form, not just colour. */}
                 <th scope="row" className="relative px-4 py-3 align-middle">
                   <StateStripe tone={STRIPE_TONE[phase] ?? "neutral"} />
@@ -132,16 +154,32 @@ export function AuctionTable({
                 </th>
 
                 <td className="px-4 py-3 align-middle">
-                  <div className="flex min-w-0 flex-col">
-                    <Link
-                      to={`/auctions/${a.id.toString()}`}
-                      className="truncate text-[0.8125rem] text-[var(--color-ink)] no-underline hover:underline"
-                    >
-                      Token #{a.tokenId.toString()}
-                    </Link>
-                    <span className="tnum truncate text-[0.6875rem] text-[var(--color-ink-3)]">
-                      {a.nft}
-                    </span>
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    {/* alt="" on purpose: the link beside it already names the
+                        token, and announcing it twice helps nobody. */}
+                    <NftMedia
+                      src={art?.image}
+                      nft={a.nft}
+                      tokenId={a.tokenId}
+                      isLoading={art?.isLoading ?? false}
+                      size="thumb"
+                      alt=""
+                    />
+                    <div className="flex min-w-0 flex-col">
+                      <Link
+                        to={`/auctions/${a.id.toString()}`}
+                        className="truncate text-[0.8125rem] text-[var(--color-ink)] no-underline hover:underline"
+                      >
+                        {art?.name ?? fallbackName(a.tokenId)}
+                      </Link>
+                      <span className="truncate text-[0.6875rem] text-[var(--color-ink-3)]">
+                        {/* The collection name when the contract has one, and
+                            the address otherwise. The address is the fallback
+                            rather than the default because a name a viewer can
+                            read beats twenty hex digits they cannot. */}
+                        {art?.collection ?? <span className="tnum">{a.nft}</span>}
+                      </span>
+                    </div>
                   </div>
                 </td>
 

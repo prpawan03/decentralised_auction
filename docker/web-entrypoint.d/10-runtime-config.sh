@@ -40,6 +40,7 @@
 #          demoNftAddress:      "0xe7f1...",              // string, 42 chars
 #          blockExplorerUrl:    "",                       // string, optional
 #          walletConnectProjectId: "",                    // string, optional
+#          ipfsGateway:         "https://ipfs.io/ipfs/",  // string, optional
 #          blockTime:           2,                        // number, seconds
 #          seedDemoData:        true,                     // boolean
 #          buildVersion:        "dev",                    // string
@@ -50,7 +51,8 @@
 #
 #        VITE_CHAIN_ID, VITE_CHAIN_NAME, VITE_RPC_URL,
 #        VITE_AUCTION_HOUSE_ADDRESS, VITE_DEMO_NFT_ADDRESS,
-#        VITE_BLOCK_TIME, VITE_SEED_DEMO_DATA, VITE_BUILD_VERSION
+#        VITE_BLOCK_TIME, VITE_SEED_DEMO_DATA, VITE_BUILD_VERSION,
+#        VITE_IPFS_GATEWAY
 #
 #    web/src/config/runtime.ts implements this order. It drops any value that
 #    is an empty string or that still holds a `${...}` placeholder, so an
@@ -110,6 +112,10 @@ BUILD_VERSION_VALUE="$(js_string "${BUILD_VERSION:-dev}")"
 # empty value is the same as an absent value.
 BLOCK_EXPLORER_VALUE="$(js_string "${BLOCK_EXPLORER_URL:-}")"
 WALLETCONNECT_VALUE="$(js_string "${WALLETCONNECT_PROJECT_ID:-}")"
+# Where ipfs:// token metadata is fetched from. Empty means the built-in
+# public gateway. An operator running their own node sets this so viewers do
+# not disclose which lots they browse to a third party.
+IPFS_GATEWAY_VALUE="$(js_string "${IPFS_GATEWAY:-}")"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 cat > "${SITE_ROOT}/config.js" <<EOF
@@ -124,6 +130,7 @@ window.__AUCTION_CONFIG__ = {
   demoNftAddress: "${DEMO_NFT_VALUE}",
   blockExplorerUrl: "${BLOCK_EXPLORER_VALUE}",
   walletConnectProjectId: "${WALLETCONNECT_VALUE}",
+  ipfsGateway: "${IPFS_GATEWAY_VALUE}",
   blockTime: ${BLOCK_TIME_VALUE},
   seedDemoData: ${SEED_VALUE},
   buildVersion: "${BUILD_VERSION_VALUE}",

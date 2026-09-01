@@ -7,6 +7,7 @@ import { wagmiConfig } from "@/config/wagmi";
 import { TickerProvider } from "@/hooks/useTicker";
 import { TxTrackerProvider } from "@/hooks/useTxTracker";
 import { ActivityProvider } from "@/hooks/useAuctionEvents";
+import { AlertsProvider } from "@/hooks/useAuctionAlerts";
 import { useTheme } from "@/hooks/useTheme";
 
 /**
@@ -19,6 +20,7 @@ import { useTheme } from "@/hooks/useTheme";
  *           TxTracker      receipt watchers, mounted above the routes so a
  *                          navigation cannot orphan a pending transaction
  *             Activity     event watchers -> query invalidation
+ *               Alerts     snapshot diffing -> outbid / ending / settled
  */
 
 function makeQueryClient() {
@@ -52,7 +54,9 @@ export function Providers({ children }: { children: ReactNode }) {
         <RainbowKitThemeBridge>
           <TickerProvider>
             <TxTrackerProvider>
-              <ActivityProvider>{children}</ActivityProvider>
+              <ActivityProvider>
+                <AlertsProvider>{children}</AlertsProvider>
+              </ActivityProvider>
             </TxTrackerProvider>
           </TickerProvider>
         </RainbowKitThemeBridge>

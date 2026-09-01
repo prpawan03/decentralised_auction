@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { WalletButton } from "@/features/wallet/WalletButton";
 import { ConnectionStrip, NodeDownBanner } from "@/features/wallet/ReadOnlyNotice";
 import { WithdrawPanel } from "@/features/portfolio/WithdrawPanel";
+import { AlertsToggle } from "@/features/auctions/AlertsToggle";
 import { TxTray } from "@/components/ui/TxTray";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/cn";
@@ -82,6 +83,8 @@ export function RootLayout() {
               ))}
             </ul>
           </nav>
+
+          <AlertsToggle />
 
           <button
             type="button"
