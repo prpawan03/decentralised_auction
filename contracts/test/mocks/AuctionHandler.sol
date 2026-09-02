@@ -36,6 +36,8 @@ contract AuctionHandler is CommonBase, StdUtils {
     uint256 public createCalls;
     uint256 public bidCalls;
     uint256 public buyNowCalls;
+    uint256 public dutchCreateCalls;
+    uint256 public buyDutchCalls;
     uint256 public settleCalls;
     uint256 public cancelCalls;
     uint256 public withdrawCalls;
@@ -102,6 +104,9 @@ contract AuctionHandler is CommonBase, StdUtils {
 
         uint256 id = auctionSeed % total;
         AuctionCore.Auction memory auction = HOUSE.getAuction(id);
+        // A descending listing takes no bids, and `minimumBid` reverts on one.
+        // Skipping keeps this a no-op rather than a revert that would end the run.
+        if (auction.format != AuctionCore.Format.English) return;
         if (auction.status != AuctionCore.Status.Live) return;
         if (block.timestamp >= auction.endTime) return;
 
@@ -128,6 +133,10 @@ contract AuctionHandler is CommonBase, StdUtils {
 
         uint256 id = auctionSeed % total;
         AuctionCore.Auction memory auction = HOUSE.getAuction(id);
+        // On a Dutch listing `buyNowPrice` holds the OPENING price, so the
+        // check below would read a live buy-now offer that does not exist and
+        // call the wrong entry point.
+        if (auction.format != AuctionCore.Format.English) return;
         if (auction.status != AuctionCore.Status.Live) return;
         if (block.timestamp >= auction.endTime) return;
         if (auction.buyNowPrice == 0 || auction.highestBid >= auction.buyNowPrice) return;
@@ -142,6 +151,74 @@ contract AuctionHandler is CommonBase, StdUtils {
 
         totalDeposited += price;
         buyNowCalls += 1;
+    }
+
+    /// @notice Mints a token and lists it as a descending-price auction.
+    /// @param actorSeed Picks the seller.
+    /// @param startSeed Picks the opening price.
+    /// @param floorSeed Picks the floor, always at or below the opening price.
+    /// @param durationSeed Picks the duration.
+    function handleCreateDutchAuction(
+        uint256 actorSeed,
+        uint256 startSeed,
+        uint256 floorSeed,
+        uint256 durationSeed
+    ) external {
+        if (HOUSE.totalAuctions() >= 24) return;
+
+        address actor = _actor(actorSeed);
+        uint64 duration = uint64(bound(durationSeed, HOUSE.MIN_DURATION(), HOUSE.MAX_DURATION()));
+        // `createDutchAuction` requires a non-zero start at or above the floor.
+        // Bounding both here keeps every generated listing legal, so the run
+        // spends its calls on real state instead of on reverts.
+        uint96 start = uint96(bound(startSeed, 1, 100 ether));
+        uint96 floor = uint96(bound(floorSeed, 0, start));
+
+        vm.startPrank(actor);
+        uint256 tokenId = NFT.mint(actor, "ipfs://invariant-dutch");
+        NFT.approve(address(HOUSE), tokenId);
+        HOUSE.createDutchAuction(address(NFT), tokenId, start, floor, duration);
+        vm.stopPrank();
+
+        dutchCreateCalls += 1;
+    }
+
+    /// @notice Buys a random live Dutch listing at whatever the clock is showing.
+    /// @dev Overpays on roughly half the calls, on purpose. `DutchAuction.buy`
+    ///      credits the excess to `pendingReturns` rather than refunding it in
+    ///      the transaction, and that is money movement no other handler
+    ///      produces. Without it the solvency invariants would never see a
+    ///      credit that did not come from being outbid.
+    /// @param actorSeed Picks the buyer.
+    /// @param auctionSeed Picks the auction.
+    /// @param overpaySeed Decides whether to overpay, and by how much.
+    function handleBuyDutch(uint256 actorSeed, uint256 auctionSeed, uint256 overpaySeed) external {
+        uint256 total = HOUSE.totalAuctions();
+        if (total == 0) return;
+
+        uint256 id = auctionSeed % total;
+        AuctionCore.Auction memory auction = HOUSE.getAuction(id);
+        if (auction.format != AuctionCore.Format.Dutch) return;
+        if (auction.status != AuctionCore.Status.Live) return;
+        // The clock stops at endTime: past it the item is unsold, not free.
+        if (block.timestamp >= auction.endTime) return;
+
+        address actor = _actor(actorSeed);
+        if (actor == auction.seller) return;
+
+        uint256 price = HOUSE.currentPrice(id);
+        uint256 overpay = overpaySeed % 2 == 1 ? bound(overpaySeed, 1, 3 ether) : 0;
+        uint256 sent = price + overpay;
+
+        vm.deal(actor, actor.balance + sent);
+        vm.prank(actor);
+        HOUSE.buy{value: sent}(id);
+
+        // Every wei sent enters the house, including the excess: that is
+        // credited, not returned, so it stays on the balance sheet until it is
+        // withdrawn.
+        totalDeposited += sent;
+        buyDutchCalls += 1;
     }
 
     /// @notice Settles a random auction whose time has run out.

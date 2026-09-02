@@ -145,7 +145,21 @@ contract AuctionHouseInvariantTest is Test {
         handler.handleWithdraw(1);
         assertEq(handler.withdrawCalls(), 1, "the handler could not withdraw");
 
-        // And the accounting still lines up after that whole sequence.
+        // The descending format, driven the same way. This is the assertion
+        // that stops the Dutch invariant coverage being vacuous: a handler
+        // that silently never fires would leave every invariant passing while
+        // proving nothing at all about `buy`.
+        handler.handleCreateDutchAuction(2, 10 ether, 1 ether, 1 hours);
+        assertEq(handler.dutchCreateCalls(), 1, "the handler could not create a Dutch auction");
+
+        // An odd overpay seed, so this also exercises the excess-to-credit
+        // path that no other action produces.
+        handler.handleBuyDutch(3, house.totalAuctions() - 1, 3);
+        assertEq(handler.buyDutchCalls(), 1, "the handler could not buy a Dutch listing");
+
+        // And the accounting still lines up after that whole sequence,
+        // including the overpayment, which is credited rather than returned
+        // and so must still be sitting in the house.
         assertEq(address(house).balance, handler.totalDeposited() - handler.totalWithdrawn());
     }
 

@@ -24,8 +24,29 @@ const DEPLOYMENTS_DIR = path.resolve(HERE, "..", "deployments");
 interface Item {
   readonly name: string;
   readonly description: string;
-  /** A real, reachable image URL. Verified against Wikimedia Commons. */
+  /**
+   * Either a real, reachable image URL verified against Wikimedia Commons, or
+   * a self-contained `data:` URI. The Dutch entries below use the latter so at
+   * least part of the demo renders with no network at all, and so the seeded
+   * book exercises BOTH metadata paths the frontend parses.
+   */
   readonly image: string;
+}
+
+/**
+ * A tiny self-contained placard, as a `data:` image.
+ *
+ * No pinning service, no gateway, no internet. It also gives the frontend an
+ * inline-metadata token to parse alongside the remote ones, which is the other
+ * half of `planTokenUri`.
+ */
+function inlineArtwork(label: string, hue: number): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480">` +
+    `<rect width="480" height="480" fill="hsl(${String(hue)},45%,22%)"/>` +
+    `<text x="240" y="250" font-family="monospace" font-size="34" fill="#e8f1f6" ` +
+    `text-anchor="middle">${label}</text></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
 /**
@@ -69,6 +90,16 @@ const CATALOGUE = {
     image:
       "https://upload.wikimedia.org/wikipedia/commons/thumb/1/16/Braun_Nizo_6080_Super_8_Camera_-_Austin_Calhoon_Phototgraph.jpg/960px-Braun_Nizo_6080_Super_8_Camera_-_Austin_Calhoon_Phototgraph.jpg",
   },
+  dutchFalling: {
+    name: "Braun T3 Pocket Radio, 1958",
+    description: "Dieter Rams. Descending price: it falls from 8 ETH toward 1 ETH over an hour.",
+    image: inlineArtwork("DUTCH / T3", 205),
+  },
+  dutchNearFloor: {
+    name: "Vitsoe 606 Shelving, one bay",
+    description: "Descending price, already most of the way down to its floor.",
+    image: inlineArtwork("DUTCH / 606", 145),
+  },
 } as const satisfies Record<string, Item>;
 
 /** How each seeded auction is meant to look in the UI. */
@@ -79,6 +110,8 @@ const STATE_LABEL = {
   buyNow: "Live, buy-now open",
   settled: "Settled, has a winner",
   belowReserve: "Closed below reserve",
+  dutchFalling: "Dutch, price falling",
+  dutchNearFloor: "Dutch, near the floor",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -145,6 +178,34 @@ async function list(
   await house.write.createAuction([nft.address, tokenId, reserve, buyNow, duration], {
     account: seller.account,
   });
+
+  return { auctionId, tokenId };
+}
+
+/**
+ * Mints an item to `seller` and opens a DESCENDING auction on it.
+ *
+ * The argument order is the opposite way round from {list}: `createAuction`
+ * takes (reserve, buyNow) ascending, `createDutchAuction` takes (start, floor)
+ * descending. Keeping them in separate helpers is what stops the two being
+ * transposed, which would list an item with an inverted price curve.
+ */
+async function listDutch(
+  seller: Wallet,
+  item: Item,
+  options: { start: bigint; floor: bigint; duration: bigint },
+): Promise<{ auctionId: bigint; tokenId: bigint }> {
+  const tokenId = await nft.read.totalMinted();
+  await nft.write.mint([seller.account.address, metadataUri(item)], {
+    account: seller.account,
+  });
+  await nft.write.approve([house.address, tokenId], { account: seller.account });
+
+  const auctionId = await house.read.totalAuctions();
+  await house.write.createDutchAuction(
+    [nft.address, tokenId, options.start, options.floor, options.duration],
+    { account: seller.account },
+  );
 
   return { auctionId, tokenId };
 }
@@ -263,6 +324,22 @@ const endingSoonAuction = await list(cara, CATALOGUE.endingSoon, {
   duration: BigInt(75 + drift),
 });
 
+// The descending format. Two of them, because the interesting thing about a
+// Dutch listing is WHERE ON THE SLOPE it is, and one example cannot show that.
+// The first has just opened and is falling visibly; the second was given a
+// floor close to its opening price, so it reads as nearly bottomed out.
+const dutchFallingAuction = await listDutch(ben, CATALOGUE.dutchFalling, {
+  start: parseEther("8"),
+  floor: parseEther("1"),
+  duration: BigInt(3600 + drift),
+});
+
+const dutchNearFloorAuction = await listDutch(eli, CATALOGUE.dutchNearFloor, {
+  start: parseEther("2.2"),
+  floor: parseEther("2"),
+  duration: BigInt(1800 + drift),
+});
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
@@ -275,10 +352,10 @@ const SELLER_NAMES = new Map<string, string>([
   [eli.account.address.toLowerCase(), "acct5 Eli"],
 ]);
 
-const STATUS_NAMES = ["Live", "Settled", "Cancelled", "ReserveNotMet"] as const;
+const STATUS_NAMES = ["Live", "Settled", "Cancelled", "ReserveNotMet", "DeliveryFailed"] as const;
 
 const rows: string[][] = [
-  ["ID", "Item", "Seller", "State", "Top bid", "Leader", "Ends in", "Buy now"],
+  ["ID", "Item", "Seller", "State", "Top bid / price", "Leader", "Ends in", "Buy now / start->floor"],
 ];
 
 /** Formats a wall-clock countdown. */
@@ -296,6 +373,8 @@ const seeded = [
   { key: "buyNow", ...buyNowAuction },
   { key: "settled", ...settledAuction },
   { key: "belowReserve", ...belowReserveAuction },
+  { key: "dutchFalling", ...dutchFallingAuction },
+  { key: "dutchNearFloor", ...dutchNearFloorAuction },
 ] as const;
 
 const now = await chainNow();
@@ -305,17 +384,34 @@ for (const entry of seeded) {
   // Subtract the drift, so the column reads as real seconds on a wall clock.
   const remaining = Number(auction.endTime) - now - drift;
 
+  // On a Dutch listing the two price fields mean the opposite of what their
+  // names say: `buyNowPrice` is the OPENING price and `reservePrice` is the
+  // FLOOR. Printing them under the English headings would advertise an
+  // 8 ETH "buy now" for an item whose asking price is already far below it -
+  // the same misreading the frontend had to be taught to avoid.
+  const isDutch = auction.format === 1;
+  const price = isDutch
+    ? `${formatEther(await house.read.currentPrice([entry.auctionId]))} ETH`
+    : auction.highestBid === 0n
+      ? "-"
+      : `${formatEther(auction.highestBid)} ETH`;
+  const lastColumn = isDutch
+    ? `${formatEther(auction.buyNowPrice)} -> ${formatEther(auction.reservePrice)}`
+    : auction.buyNowPrice === 0n
+      ? "-"
+      : `${formatEther(auction.buyNowPrice)} ETH`;
+
   rows.push([
     String(entry.auctionId),
     CATALOGUE[entry.key].name,
     SELLER_NAMES.get(auction.seller.toLowerCase()) ?? auction.seller,
     `${STATUS_NAMES[auction.status]} (${STATE_LABEL[entry.key]})`,
-    auction.highestBid === 0n ? "-" : `${formatEther(auction.highestBid)} ETH`,
+    price,
     auction.highestBidder === "0x0000000000000000000000000000000000000000"
       ? "-"
       : (SELLER_NAMES.get(auction.highestBidder.toLowerCase()) ?? auction.highestBidder),
     auction.status !== 0 ? "closed" : countdown(remaining),
-    auction.buyNowPrice === 0n ? "-" : `${formatEther(auction.buyNowPrice)} ETH`,
+    lastColumn,
   ]);
 }
 

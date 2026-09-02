@@ -192,11 +192,20 @@ abstract contract EnglishAuction is AuctionCore {
      * @notice The smallest bid the auction accepts right now.
      * @dev With no bids this is {MIN_INCREMENT}. The reserve is NOT a bid floor:
      *      bids below the reserve are accepted and refunded in full at settlement.
-     * @param auctionId The auction.
+     *
+     *      Guarded on the format like every other English entry point. Without
+     *      the guard this returned a number for a Dutch auction too - the
+     *      ascending increment formula applied to a descending sale price -
+     *      which is not a smaller answer but a MEANINGLESS one, and a caller
+     *      has no way to tell the two apart. A descending auction takes no
+     *      bids at all, so the honest answer is a revert.
+     * @param auctionId The auction. It MUST be an English auction.
      * @return The minimum acceptable `msg.value`, in wei.
      */
     function minimumBid(uint256 auctionId) external view returns (uint256) {
-        return _minimumBid(_auctionAt(auctionId));
+        Auction storage auction = _auctionAt(auctionId);
+        _requireFormat(auctionId, auction, Format.English);
+        return _minimumBid(auction);
     }
 
     // ---------------------------------------------------------------------
