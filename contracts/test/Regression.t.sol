@@ -3,6 +3,7 @@ pragma solidity 0.8.36;
 
 import {AuctionHouseBase} from "./AuctionHouseBase.t.sol";
 import {AuctionHouse} from "../src/AuctionHouse.sol";
+import {AuctionCore} from "../src/core/AuctionCore.sol";
 import {ReentrantBidder} from "./mocks/ReentrantBidder.sol";
 import {RevertingReceiver} from "./mocks/RevertingReceiver.sol";
 import {SmartWalletSeller} from "./mocks/SmartWalletSeller.sol";
@@ -59,7 +60,7 @@ contract RegressionTest is AuctionHouseBase {
         assertEq(attacker.reentryAttempts(), 1, "the attack did not run");
         assertEq(attacker.reentryRejections(), 1, "the re-entrant buyNow was NOT rejected");
         // The victim auction is untouched: no free purchase happened.
-        assertEq(uint8(house.getAuction(victimId).status), uint8(AuctionHouse.Status.Live));
+        assertEq(uint8(house.getAuction(victimId).status), uint8(AuctionCore.Status.Live));
         assertEq(house.getAuction(victimId).highestBidder, address(0));
         // The attacker was paid its credit exactly once, and nothing more.
         assertEq(attacker.totalReceived(), 1 ether, "the attacker drained more than it was owed");
@@ -125,12 +126,12 @@ contract RegressionTest is AuctionHouseBase {
         house.bid{value: 1 ether}(auctionId);
 
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.SellerCannotBid.selector);
+        vm.expectRevert(AuctionCore.SellerCannotBid.selector);
         house.buyNow{value: 5 ether}(auctionId);
 
         // The bid still stands and the seller is still on the hook for it.
         assertEq(house.getAuction(auctionId).highestBidder, alice);
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Live));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.Live));
     }
 
     /// @notice Wash trading and bid front-running both start with a seller bid.
@@ -138,7 +139,7 @@ contract RegressionTest is AuctionHouseBase {
         (uint256 auctionId, ) = _listSimple(seller);
 
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.SellerCannotBid.selector);
+        vm.expectRevert(AuctionCore.SellerCannotBid.selector);
         house.bid{value: 1 ether}(auctionId);
     }
 
@@ -150,7 +151,7 @@ contract RegressionTest is AuctionHouseBase {
         house.bid{value: 1 ether}(auctionId);
 
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        vm.expectRevert(AuctionCore.AuctionHasBids.selector);
         house.cancelAuction(auctionId);
     }
 
@@ -184,7 +185,7 @@ contract RegressionTest is AuctionHouseBase {
         // and only its problem.
         assertEq(house.pendingReturns(address(griefer)), 1 ether);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.TransferFailed.selector, address(griefer), uint256(1 ether))
+            abi.encodeWithSelector(AuctionCore.TransferFailed.selector, address(griefer), uint256(1 ether))
         );
         griefer.withdraw();
 
@@ -209,7 +210,7 @@ contract RegressionTest is AuctionHouseBase {
         vm.warp(START_TIME + 1 hours);
         house.settle(auctionId);
 
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Settled));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.Settled));
         assertEq(nft.ownerOf(tokenId), address(griefer), "the token was not delivered");
         vm.prank(seller);
         assertGt(house.withdraw(), 0, "the seller could not be paid");
@@ -256,14 +257,14 @@ contract RegressionTest is AuctionHouseBase {
         );
         // On this path it is the credit, and the sale is recorded as void.
         assertFalse(holdsToken);
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.DeliveryFailed));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.DeliveryFailed));
         assertEq(house.pendingReturns(alice), 10 ether, "the winner was not made whole");
 
         // And the seller is credited nothing at all, nor is the platform.
         assertEq(house.pendingReturns(seller), 0, "the seller was paid for an undelivered token");
         assertEq(house.pendingReturns(feeSink), 0, "a fee was taken on an undelivered token");
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.NothingToWithdraw.selector);
+        vm.expectRevert(AuctionCore.NothingToWithdraw.selector);
         house.withdraw();
 
         // The winner's refund is real money, not just an entry.
@@ -293,7 +294,7 @@ contract RegressionTest is AuctionHouseBase {
         vm.warp(START_TIME + 1 hours);
         house.settle(auctionId);
 
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Settled));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.Settled));
         assertEq(hostile.ownerOf(tokenId), alice);
         uint256 fee = house.pendingReturns(feeSink);
         assertEq(fee, (10 ether * FEE_BPS) / 10_000);
@@ -327,7 +328,7 @@ contract RegressionTest is AuctionHouseBase {
         house.settle(auctionId);
 
         // The failure is recorded, not swallowed, and the money still moved.
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.ReserveNotMet));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.ReserveNotMet));
         assertEq(house.pendingNft(auctionId), seller, "the failed handover was not recorded");
         assertEq(hostile.ownerOf(tokenId), address(house));
         assertEq(house.pendingReturns(alice), 1 ether);
@@ -335,7 +336,7 @@ contract RegressionTest is AuctionHouseBase {
         // While the collection is still frozen the retry reverts, and the claim
         // survives that failure.
         vm.prank(seller);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.TransferFailed.selector, seller, tokenId));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.TransferFailed.selector, seller, tokenId));
         house.claimNft(auctionId);
         assertEq(house.pendingNft(auctionId), seller, "a failed retry consumed the claim");
 
@@ -349,7 +350,7 @@ contract RegressionTest is AuctionHouseBase {
 
         // And it cannot be claimed a second time.
         vm.prank(seller);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NoPendingNft.selector, auctionId));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.NoPendingNft.selector, auctionId));
         house.claimNft(auctionId);
     }
 
@@ -373,7 +374,7 @@ contract RegressionTest is AuctionHouseBase {
         vm.prank(alice);
         house.buyNow{value: 5 ether}(auctionId);
 
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.DeliveryFailed));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.DeliveryFailed));
         assertEq(house.pendingReturns(alice), 5 ether, "the buyer was not made whole");
         assertEq(house.pendingReturns(seller), 0, "the seller was paid for an undelivered token");
         assertEq(house.pendingReturns(feeSink), 0);
@@ -390,7 +391,7 @@ contract RegressionTest is AuctionHouseBase {
         house.settle(auctionId);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NoPendingNft.selector, auctionId));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.NoPendingNft.selector, auctionId));
         house.claimNft(auctionId);
     }
 
@@ -408,23 +409,23 @@ contract RegressionTest is AuctionHouseBase {
 
         // Sending nothing is the exact old exploit.
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BuyNowDisabled.selector, auctionId));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.BuyNowDisabled.selector, auctionId));
         house.buyNow{value: 0}(auctionId);
 
         // Sending real money does not enable it either.
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BuyNowDisabled.selector, auctionId));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.BuyNowDisabled.selector, auctionId));
         house.buyNow{value: 5 ether}(auctionId);
 
         assertEq(nft.ownerOf(tokenId), address(house), "the token left escrow for free");
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Live));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.Live));
     }
 
     /// @notice A zero buy-now price cannot even be listed as a real price.
     function test_RevertWhen_ListingAFreeBuyNowPrice() public {
         uint256 tokenId = _mintAndApprove(seller);
         vm.prank(seller);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidBuyNowPrice.selector, uint96(1), uint96(0)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.InvalidBuyNowPrice.selector, uint96(1), uint96(0)));
         house.createAuction(address(nft), tokenId, 0, 1, 1 hours);
     }
 
@@ -450,7 +451,7 @@ contract RegressionTest is AuctionHouseBase {
         vm.prank(stranger);
         house.settle(auctionId);
 
-        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionHouse.Status.Settled));
+        assertEq(uint8(house.getAuction(auctionId).status), uint8(AuctionCore.Status.Settled));
         assertEq(nft.ownerOf(tokenId), alice);
 
         // And the winner's money reached the seller, not a permanent limbo.
@@ -581,7 +582,7 @@ contract RegressionTest is AuctionHouseBase {
 
         assertEq(house.escrowOf(auctionId), 0);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.AuctionNotLive.selector, auctionId, AuctionHouse.Status.Settled)
+            abi.encodeWithSelector(AuctionCore.AuctionNotLive.selector, auctionId, AuctionCore.Status.Settled)
         );
         house.settle(auctionId);
     }

@@ -4,6 +4,7 @@ import { AuctionTable } from "./AuctionTable";
 import { ActivityFeed } from "./ActivityFeed";
 import { BidButton } from "@/features/bidding/BidDialog";
 import { SettleButton } from "@/features/bidding/AuctionActions";
+import { BuyDutchButton } from "@/features/bidding/BuyDutchButton";
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/ui/States";
 import { ButtonLink } from "@/components/ui/Button";
 import { useAuctions } from "@/hooks/useAuctions";
@@ -314,6 +315,9 @@ export default function AuctionsPage() {
               renderAction={(a: Auction) => (
                 <div className="flex justify-end gap-1.5">
                   <SettleButton auction={a} />
+                  {/* Each renders null for the format it does not serve, so
+                      exactly one of the two ever appears. */}
+                  <BuyDutchButton auction={a} />
                   {/* null, not a local estimate: the grid has not read
                       minimumBid(). The dialog computes its own hint and the
                       simulation is the real gate, so nothing here can present

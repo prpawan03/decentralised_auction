@@ -14,14 +14,25 @@ import { ButtonLink } from "@/components/ui/Button";
 import { StatusPill, StandingPill } from "./StatusPill";
 import { AntiSnipeExplainer, AntiSnipeBadge } from "./AntiSnipeBadge";
 import { WatchButton } from "./WatchButton";
+import { DutchPrice, FormatPill } from "./DutchPrice";
 import { TokenPanel } from "./TokenPanel";
 import { useNftMetadata } from "@/hooks/useNftMetadata";
 import { fallbackName } from "@/lib/nftMetadata";
 import { BidButton } from "@/features/bidding/BidDialog";
 import { BuyNowButton, SettleButton, CancelButton } from "@/features/bidding/AuctionActions";
+import { BuyDutchButton } from "@/features/bidding/BuyDutchButton";
 import { ConnectPrompt } from "@/features/wallet/WalletButton";
 import { formatAbsolute, formatRelativePast, toIso } from "@/lib/format";
-import { buyNowEnabled, hasBid, phaseOf, reserveMet, sameAddress } from "@/lib/auction";
+import {
+  buyNowEnabled,
+  dutchFloorPrice,
+  dutchStartPrice,
+  hasBid,
+  isDutch,
+  phaseOf,
+  reserveMet,
+  sameAddress,
+} from "@/lib/auction";
 
 /**
  * One auction, in full.
@@ -113,6 +124,7 @@ export default function AuctionDetailPage() {
   const closed = phase === "settled" || phase === "cancelled" || phase === "reserve-not-met" || phase === "delivery-failed";
   const met = reserveMet(auction);
   const isSeller = sameAddress(auction.seller, address);
+  const dutch = isDutch(auction);
 
   return (
     <main id="main" className="mx-auto w-full max-w-[80rem] px-4 py-6 lg:px-6">
@@ -148,6 +160,7 @@ export default function AuctionDetailPage() {
         <div className="flex flex-wrap items-center gap-2">
           <WatchButton auctionId={auction.id} />
           <StatusPill auction={auction} now={now} />
+          <FormatPill auction={auction} />
           <StandingPill auction={auction} account={address} now={now} />
           <AntiSnipeBadge auction={auction} />
         </div>
@@ -161,31 +174,65 @@ export default function AuctionDetailPage() {
               Price and time
             </h2>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-5 px-5 py-5 sm:grid-cols-4">
-              <Stat
-                label="Top bid"
-                hint={hasBid(auction) ? (met ? "meets the reserve" : "below the reserve") : "no bids yet"}
-              >
-                {hasBid(auction) ? (
-                  <Money wei={auction.highestBid} size="lg" tone={met ? "live" : "default"} />
-                ) : (
-                  <span className="text-2xl text-[var(--color-ink-3)]">—</span>
-                )}
-              </Stat>
+              {dutch ? (
+                <>
+                  <Stat
+                    label={closed ? "Sold at" : "Price now"}
+                    hint={closed ? undefined : "falls every second"}
+                  >
+                    {closed ? (
+                      hasBid(auction) ? (
+                        <Money wei={auction.highestBid} size="lg" tone="live" />
+                      ) : (
+                        <span className="text-2xl text-[var(--color-ink-3)]">unsold</span>
+                      )
+                    ) : (
+                      <DutchPrice auction={auction} size="lg" />
+                    )}
+                  </Stat>
 
-              <Stat label="Minimum next bid" hint="from the contract">
-                <Money wei={minimumBid ?? 0n} size="lg" />
-              </Stat>
+                  <Stat label="Opening price" hint="where the decay started">
+                    <Money wei={dutchStartPrice(auction)} size="lg" tone="muted" />
+                  </Stat>
 
-              <Stat
-                label="Reserve"
-                hint={auction.reservePrice === 0n ? "no reserve set" : met ? "met" : "not met"}
-              >
-                {auction.reservePrice > 0n ? (
-                  <Money wei={auction.reservePrice} size="lg" tone="muted" />
-                ) : (
-                  <span className="text-2xl text-[var(--color-ink-3)]">none</span>
-                )}
-              </Stat>
+                  <Stat label="Floor" hint="the lowest it will reach">
+                    <Money wei={dutchFloorPrice(auction)} size="lg" tone="muted" />
+                  </Stat>
+                </>
+              ) : (
+                <>
+                  <Stat
+                    label="Top bid"
+                    hint={hasBid(auction) ? (met ? "meets the reserve" : "below the reserve") : "no bids yet"}
+                  >
+                    {hasBid(auction) ? (
+                      <Money wei={auction.highestBid} size="lg" tone={met ? "live" : "default"} />
+                    ) : (
+                      <span className="text-2xl text-[var(--color-ink-3)]">—</span>
+                    )}
+                  </Stat>
+
+                  {/* Not shown for Dutch: `minimumBid()` carries no format
+                      guard, so it happily returns the English increment
+                      formula applied to a Dutch sale price. The number is
+                      meaningless there, and showing it would invite someone
+                      to act on it. */}
+                  <Stat label="Minimum next bid" hint="from the contract">
+                    <Money wei={minimumBid ?? 0n} size="lg" />
+                  </Stat>
+
+                  <Stat
+                    label="Reserve"
+                    hint={auction.reservePrice === 0n ? "no reserve set" : met ? "met" : "not met"}
+                  >
+                    {auction.reservePrice > 0n ? (
+                      <Money wei={auction.reservePrice} size="lg" tone="muted" />
+                    ) : (
+                      <span className="text-2xl text-[var(--color-ink-3)]">none</span>
+                    )}
+                  </Stat>
+                </>
+              )}
 
               <Stat
                 label={closed ? "Closed" : "Ends in"}
@@ -208,6 +255,7 @@ export default function AuctionDetailPage() {
             {/* Actions. Absent when they cannot apply; never present-and-broken. */}
             <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-line)] bg-[var(--color-raised)] px-5 py-3">
               <BidButton auction={auction} minimumBid={minimumBid} size="md" />
+              <BuyDutchButton auction={auction} />
               <BuyNowButton auction={auction} />
               <SettleButton auction={auction} />
               <CancelButton auction={auction} />
@@ -216,7 +264,11 @@ export default function AuctionDetailPage() {
                   This auction is closed. Any ETH owed to you is in your withdrawable balance.
                 </p>
               ) : null}
-              {buyNowEnabled(auction) ? (
+              {dutch ? (
+                <p className="ml-auto text-[0.75rem] text-[var(--color-ink-3)]">
+                  Descending price · no bidding
+                </p>
+              ) : buyNowEnabled(auction) ? (
                 <p className="ml-auto text-[0.75rem] text-[var(--color-ink-3)]">
                   Buy-now price{" "}
                   <Money wei={auction.buyNowPrice} size="sm" className="align-baseline" />
@@ -278,9 +330,11 @@ export default function AuctionDetailPage() {
             </dl>
           </section>
 
-          <div className="panel">
-            <AntiSnipeExplainer auction={auction} />
-          </div>
+          {dutch ? null : (
+            <div className="panel">
+              <AntiSnipeExplainer auction={auction} />
+            </div>
+          )}
         </div>
 
         <div className="flex min-w-0 flex-col gap-5 self-start">

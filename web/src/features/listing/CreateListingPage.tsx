@@ -14,7 +14,13 @@ import { useTxTracker } from "@/hooks/useTxTracker";
 import { decodeContractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
 import { sameAddress } from "@/lib/auction";
-import { DURATION_PRESETS, listingSchema, toCreateArgs, type ListingInput } from "./listingSchema";
+import {
+  DURATION_PRESETS,
+  LISTING_FORMATS,
+  listingSchema,
+  toCreateCall,
+  type ListingInput,
+} from "./listingSchema";
 import { cn } from "@/lib/cn";
 
 /**
@@ -43,10 +49,13 @@ export default function CreateListingPage() {
     resolver: zodResolver(listingSchema),
     mode: "onBlur",
     defaultValues: {
+      format: "english",
       nft: config.demoNftAddress,
       tokenId: "",
       reservePrice: "0",
       buyNowPrice: "0",
+      startPrice: "1",
+      floorPrice: "0",
       durationSeconds: 600,
     },
   });
@@ -61,6 +70,9 @@ export default function CreateListingPage() {
 
   /* Derived during render from the form's own values — never mirrored. */
   const values = watch();
+  /* Drives which price vocabulary the form shows. Watched rather than stored,
+     so it can never disagree with what will actually be submitted. */
+  const dutch = values.format === "dutch";
   const tokenIdValid = /^\d+$/.test(String(values.tokenId ?? "").trim());
   const nftAddress = /^0x[0-9a-fA-F]{40}$/.test(String(values.nft ?? "").trim())
     ? (values.nft as `0x${string}`)
@@ -126,14 +138,18 @@ export default function CreateListingPage() {
   /* -- create ------------------------------------------------------------ */
 
   const parsed = listingSchema.safeParse(values);
-  const createArgs = parsed.success ? toCreateArgs(parsed.data) : null;
+  /* The two formats are different functions with differently-ordered
+     arguments, so the call is resolved next to the schema that validated it
+     rather than assembled here. */
+  const createCall = parsed.success ? toCreateCall(parsed.data) : null;
 
   const createSim = useSimulateContract({
     ...auctionHouse,
-    functionName: "createAuction",
-    ...(createArgs ? { args: createArgs } : {}),
+    ...(createCall
+      ? { functionName: createCall.functionName, args: createCall.args }
+      : { functionName: "createAuction" as const }),
     ...(address ? { account: address } : {}),
-    query: { enabled: isConnected && createArgs !== null && isApproved && ownsToken, retry: false },
+    query: { enabled: isConnected && createCall !== null && isApproved && ownsToken, retry: false },
   });
 
   const { writeContractAsync: writeCreate, isPending: creating } = useWriteContract();
@@ -222,7 +238,52 @@ export default function CreateListingPage() {
         </fieldset>
 
         <fieldset className="panel border-0 p-0">
+          <legend className="col-head px-4 pt-4">Format</legend>
+          <div className="flex flex-col gap-2 px-4 pt-3 pb-4">
+            {/* Radios, not a select: two mutually exclusive options that change
+                the rest of the form, and a radio group announces that change
+                far better than a collapsed listbox. */}
+            {LISTING_FORMATS.map((f) => (
+              <label key={f.id} className="flex items-start gap-2.5 text-[0.8125rem]">
+                <input
+                  type="radio"
+                  value={f.id}
+                  {...register("format")}
+                  className="mt-0.5 accent-[var(--color-action)]"
+                />
+                <span>
+                  <span className="font-medium text-[var(--color-ink)]">{f.label}</span>
+                  <span className="block text-[0.75rem] text-[var(--color-ink-3)]">{f.describe}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="panel border-0 p-0">
           <legend className="col-head px-4 pt-4">Price</legend>
+          {dutch ? (
+            <div className="grid gap-4 px-4 pt-3 pb-4 sm:grid-cols-2">
+              <Field
+                label="Opening price"
+                suffix="ETH"
+                inputMode="decimal"
+                {...register("startPrice")}
+                {...(errors.startPrice?.message ? { error: errors.startPrice.message } : {})}
+                hint="Where the price starts. It falls from here in a straight line over the duration. Must be above zero."
+                autoComplete="off"
+              />
+              <Field
+                label="Floor price"
+                suffix="ETH"
+                inputMode="decimal"
+                {...register("floorPrice")}
+                {...(errors.floorPrice?.message ? { error: errors.floorPrice.message } : {})}
+                hint="The lowest the price will reach, held until the deadline. If nobody buys by then the item is unsold and returns to you. Set it equal to the opening price for a flat price."
+                autoComplete="off"
+              />
+            </div>
+          ) : (
           <div className="grid gap-4 px-4 pt-3 pb-4 sm:grid-cols-2">
             <Field
               label="Reserve price"
@@ -243,6 +304,7 @@ export default function CreateListingPage() {
               autoComplete="off"
             />
           </div>
+          )}
         </fieldset>
 
         <fieldset className="panel border-0 p-0">
