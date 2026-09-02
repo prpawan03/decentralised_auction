@@ -69,6 +69,21 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
      *      credited nothing, and the token is owed back to the seller - see
      *      {pendingNft} and {claimNft}.
      */
+    /**
+     * @notice Which set of rules discovers this auction's price.
+     * @dev Stored on every auction so a format's entry points can refuse an
+     *      auction that is not theirs. Without it, {bid} would happily walk the
+     *      increment ladder on a descending-price listing and quietly sell it
+     *      under a rule its seller never agreed to.
+     *
+     *      Members are append-only. The numbering of an existing member is part
+     *      of the stored record and of the frontend's decoding.
+     */
+    enum Format {
+        English,
+        Dutch
+    }
+
     enum Status {
         Live,
         Settled,
@@ -95,6 +110,7 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
      *        in basis points. It is snapshotted so the owner cannot reprice a
      *        live auction after the bidding has already started.
      * @param status The lifecycle state.
+     * @param format Which rules discover the price. See {Format}.
      */
     struct Auction {
         address seller; // slot 0 (20 + 12 = 32)
@@ -104,12 +120,13 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
         address nft; // slot 2 (20 + 12 = 32)
         uint96 buyNowPrice;
         uint256 tokenId; // slot 3
-        uint64 endTime; // slot 4 (8 + 8 + 4 + 2 + 2 + 1 = 25)
+        uint64 endTime; // slot 4 (8 + 8 + 4 + 2 + 2 + 1 + 1 = 26)
         uint64 startTime;
         uint32 extensionCount;
         uint16 minIncrementBps;
         uint16 platformFeeBps;
         Status status;
+        Format format;
     }
 
     // ---------------------------------------------------------------------
@@ -187,6 +204,23 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
     /// @param bps The fee that was asked for.
     /// @param max {MAX_FEE_BPS}.
     error FeeTooHigh(uint16 bps, uint16 max);
+    /**
+     * @notice A format's entry point was called on an auction of another format.
+     * @param auctionId The auction.
+     * @param expected The format the function belongs to.
+     * @param actual The format the auction was listed under.
+     */
+    error WrongFormat(uint256 auctionId, Format expected, Format actual);
+
+    /**
+     * @notice A descending-price listing whose prices make no sense.
+     * @dev The start MUST be above zero and MUST NOT be below the floor, or the
+     *      price would rise over time rather than fall.
+     * @param startPrice The opening price.
+     * @param floorPrice The price the decay ends at.
+     */
+    error InvalidDutchPrices(uint96 startPrice, uint96 floorPrice);
+
     /// @notice The value does not fit in the `uint96` the struct stores it in.
     /// @param value The value that was sent.
     error ValueTooLarge(uint256 value);
@@ -652,6 +686,94 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
     // ---------------------------------------------------------------------
     // Internal
     // ---------------------------------------------------------------------
+
+    /**
+     * @notice Escrows the token and opens a Live auction. Shared by every format.
+     * @dev This is the listing sequence the audit signed off on, moved here so
+     *      a second format cannot reimplement it slightly differently. The
+     *      ordering is the point and it MUST NOT be rearranged: the record is
+     *      complete and the event is emitted BEFORE the token moves, so the
+     *      contract's state is already final when an external contract first
+     *      gets control.
+     *
+     *      The `ownerOf` re-check afterwards is what makes escrow real. A fake
+     *      ERC-721 can accept `safeTransferFrom` without moving anything, and a
+     *      listing whose token never arrived is one this contract could never
+     *      deliver.
+     *
+     *      `reservePrice` and `buyNowPrice` are stored positionally and each
+     *      format reads them under its own name - a descending auction keeps
+     *      its floor in `reservePrice` and its opening price in `buyNowPrice`.
+     *      The {AuctionCreated} event carries them in the same two slots.
+     * @param nft The ERC-721 contract.
+     * @param tokenId The token to sell.
+     * @param reservePrice English: the lowest winning price. Dutch: the floor.
+     * @param buyNowPrice English: the instant purchase price, 0 to disable.
+     *        Dutch: the opening price.
+     * @param duration Seconds of bidding, from {MIN_DURATION} to {MAX_DURATION}.
+     * @param minIncrementBps The bid step, for formats that ladder. 0 otherwise.
+     * @param format Which rules govern this auction.
+     * @return auctionId The id of the new auction.
+     */
+    function _openAuction(
+        address nft,
+        uint256 tokenId,
+        uint96 reservePrice,
+        uint96 buyNowPrice,
+        uint64 duration,
+        uint16 minIncrementBps,
+        Format format
+    ) internal returns (uint256 auctionId) {
+        if (duration < MIN_DURATION || duration > MAX_DURATION) {
+            revert DurationOutOfRange(duration, MIN_DURATION, MAX_DURATION);
+        }
+
+        uint64 startTime = uint64(block.timestamp);
+        uint64 endTime = startTime + duration;
+
+        auctionId = _auctions.length;
+        _auctions.push(
+            Auction({
+                seller: msg.sender,
+                reservePrice: reservePrice,
+                highestBidder: address(0),
+                highestBid: 0,
+                nft: nft,
+                buyNowPrice: buyNowPrice,
+                tokenId: tokenId,
+                endTime: endTime,
+                startTime: startTime,
+                extensionCount: 0,
+                minIncrementBps: minIncrementBps,
+                // Snapshotted here, and read from here at settlement. Prevents
+                // the owner repricing an auction that is already taking bids.
+                platformFeeBps: platformFeeBps,
+                status: Status.Live,
+                format: format
+            })
+        );
+
+        emit AuctionCreated(auctionId, msg.sender, nft, tokenId, reservePrice, buyNowPrice, startTime, endTime);
+
+        // Interaction last. State is already final when the token moves.
+        IERC721(nft).safeTransferFrom(msg.sender, address(this), tokenId);
+
+        // Prevents a fake ERC-721 from accepting the call without moving the
+        // token, which would list an item this contract cannot deliver.
+        if (IERC721(nft).ownerOf(tokenId) != address(this)) {
+            revert TransferFailed(address(this), tokenId);
+        }
+    }
+
+    /**
+     * @notice Reverts unless `auction` was listed under `expected`.
+     * @param auctionId The auction, for the error.
+     * @param auction The auction storage pointer.
+     * @param expected The format the calling function belongs to.
+     */
+    function _requireFormat(uint256 auctionId, Auction storage auction, Format expected) internal view {
+        if (auction.format != expected) revert WrongFormat(auctionId, expected, auction.format);
+    }
 
     /**
      * @notice Moves an auction to a terminal state and credits every party.

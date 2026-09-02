@@ -65,48 +65,14 @@ abstract contract EnglishAuction is AuctionCore {
         uint96 buyNowPrice,
         uint64 duration
     ) external nonReentrant whenNotPaused returns (uint256 auctionId) {
-        if (duration < MIN_DURATION || duration > MAX_DURATION) {
-            revert DurationOutOfRange(duration, MIN_DURATION, MAX_DURATION);
-        }
         // Prevents a listing whose buy-now price is free or below the reserve.
         if (buyNowPrice != 0 && (buyNowPrice < MIN_INCREMENT || buyNowPrice < reservePrice)) {
             revert InvalidBuyNowPrice(buyNowPrice, reservePrice);
         }
 
-        uint64 startTime = uint64(block.timestamp);
-        uint64 endTime = startTime + duration;
-
-        auctionId = _auctions.length;
-        _auctions.push(
-            Auction({
-                seller: msg.sender,
-                reservePrice: reservePrice,
-                highestBidder: address(0),
-                highestBid: 0,
-                nft: nft,
-                buyNowPrice: buyNowPrice,
-                tokenId: tokenId,
-                endTime: endTime,
-                startTime: startTime,
-                extensionCount: 0,
-                minIncrementBps: DEFAULT_INCREMENT_BPS,
-                // Snapshotted here, and read from here at settlement. Prevents
-                // the owner repricing an auction that is already taking bids.
-                platformFeeBps: platformFeeBps,
-                status: Status.Live
-            })
+        auctionId = _openAuction(
+            nft, tokenId, reservePrice, buyNowPrice, duration, DEFAULT_INCREMENT_BPS, Format.English
         );
-
-        emit AuctionCreated(auctionId, msg.sender, nft, tokenId, reservePrice, buyNowPrice, startTime, endTime);
-
-        // Interaction last. State is already final when the token moves.
-        IERC721(nft).safeTransferFrom(msg.sender, address(this), tokenId);
-
-        // Prevents a fake ERC-721 from accepting the call without moving the
-        // token, which would list an item this contract cannot deliver.
-        if (IERC721(nft).ownerOf(tokenId) != address(this)) {
-            revert TransferFailed(address(this), tokenId);
-        }
     }
 
     /**
@@ -119,6 +85,9 @@ abstract contract EnglishAuction is AuctionCore {
     function bid(uint256 auctionId) external payable nonReentrant whenNotPaused {
         Auction storage auction = _auctionAt(auctionId);
 
+        // A descending-price listing has no increment ladder and no buy-now
+        // slot to sell from; both fields mean something else there.
+        _requireFormat(auctionId, auction, Format.English);
         if (auction.status != Status.Live) revert AuctionNotLive(auctionId, auction.status);
         // Invariant 3: no bid is accepted at or after endTime.
         if (block.timestamp >= auction.endTime) revert AuctionAlreadyEnded(auctionId);
@@ -180,6 +149,9 @@ abstract contract EnglishAuction is AuctionCore {
     function buyNow(uint256 auctionId) external payable nonReentrant whenNotPaused {
         Auction storage auction = _auctionAt(auctionId);
 
+        // A descending-price listing has no increment ladder and no buy-now
+        // slot to sell from; both fields mean something else there.
+        _requireFormat(auctionId, auction, Format.English);
         if (auction.status != Status.Live) revert AuctionNotLive(auctionId, auction.status);
         if (block.timestamp >= auction.endTime) revert AuctionAlreadyEnded(auctionId);
 
@@ -244,7 +216,7 @@ abstract contract EnglishAuction is AuctionCore {
      * @param auction The auction storage pointer.
      * @return `Settled` when the reserve was met, `ReserveNotMet` otherwise.
      */
-    function _settlementOutcome(Auction storage auction) internal view virtual override returns (Status) {
+    function _englishSettlementOutcome(Auction storage auction) internal view returns (Status) {
         bool reserveMet = auction.highestBidder != address(0) && auction.highestBid >= auction.reservePrice;
         return reserveMet ? Status.Settled : Status.ReserveNotMet;
     }
