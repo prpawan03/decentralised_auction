@@ -21,7 +21,7 @@ NPM          ?= npm
 .SHELLFLAGS := -eu -c
 .DEFAULT_GOAL := help
 
-.PHONY: help setup up watch down clean logs deploy seed test lint fmt prod smoke reset-chain audit
+.PHONY: help setup up watch down clean logs deploy seed test lint fmt prod smoke reset-chain audit check-actions
 
 ## ---------------------------------------------------------------------------
 ## Help
@@ -110,6 +110,9 @@ fmt: ## Format the code in place
 
 smoke: ## Check that a running stack answers correctly
 	node scripts/smoke.mjs
+
+check-actions: ## Check that every GitHub Action is pinned to a commit SHA
+	node scripts/check-action-pins.mjs
 
 audit: ## Run Slither on both contracts and print a before/after comparison
 	@mkdir -p docs/audit

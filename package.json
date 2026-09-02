@@ -44,7 +44,8 @@
     "smoke": "node scripts/smoke.mjs",
 
     "//checks": "--- Configuration checks ---",
-    "compose:config": "docker compose config --quiet && docker compose -f compose.yaml -f compose.prod.yaml config --quiet && echo \"compose: both file sets parse\""
+    "compose:config": "docker compose config --quiet && docker compose -f compose.yaml -f compose.prod.yaml config --quiet && echo \"compose: both file sets parse\"",
+    "check:actions": "node scripts/check-action-pins.mjs"
   },
   "devDependencies": {
     "prettier": "^3.6.2"
