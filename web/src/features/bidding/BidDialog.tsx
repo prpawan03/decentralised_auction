@@ -16,7 +16,7 @@ import { Countdown } from "@/components/ui/Countdown";
 import { auctionHouse } from "@/config/contracts";
 import { decodeContractError } from "@/lib/errors";
 import { formatEth, formatFee } from "@/lib/format";
-import { estimateMinimumBid, phaseOf, sameAddress, type Auction } from "@/lib/auction";
+import { estimateMinimumBid, isDutch, phaseOf, sameAddress, type Auction } from "@/lib/auction";
 import { useNow } from "@/hooks/useTicker";
 import { useTxTracker } from "@/hooks/useTxTracker";
 
@@ -338,7 +338,10 @@ export function BidButton({
   const biddable = phase === "live" || phase === "ending" || phase === "final";
   const isSeller = sameAddress(auction.seller, address as Address | undefined);
 
-  if (!biddable) return null;
+  /* A Dutch listing takes `buy`, not `bid`; the contract rejects the wrong
+     entry point, so offering this button would guarantee a failed
+     transaction. BuyDutchButton is what renders in its place. */
+  if (!biddable || isDutch(auction)) return null;
 
   return (
     <>

@@ -4,6 +4,7 @@ pragma solidity 0.8.36;
 import {Test} from "forge-std/Test.sol";
 
 import {AuctionHouse} from "../src/AuctionHouse.sol";
+import {AuctionCore} from "../src/core/AuctionCore.sol";
 import {DemoNFT} from "../src/DemoNFT.sol";
 
 /**
@@ -111,7 +112,7 @@ abstract contract AuctionHouseBase is Test {
     function _totalLiveEscrow() internal view returns (uint256 total) {
         uint256 count = house.totalAuctions();
         for (uint256 i = 0; i < count; ++i) {
-            if (house.getAuction(i).status == AuctionHouse.Status.Live) {
+            if (house.getAuction(i).status == AuctionCore.Status.Live) {
                 total += house.getAuction(i).highestBid;
             }
         }

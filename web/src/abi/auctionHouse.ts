@@ -66,7 +66,7 @@ export const auctionHouseAbi = [
         "type": "uint256"
       },
       {
-        "internalType": "enum AuctionHouse.Status",
+        "internalType": "enum AuctionCore.Status",
         "name": "status",
         "type": "uint8"
       }
@@ -199,6 +199,22 @@ export const auctionHouseAbi = [
   {
     "inputs": [
       {
+        "internalType": "uint96",
+        "name": "startPrice",
+        "type": "uint96"
+      },
+      {
+        "internalType": "uint96",
+        "name": "floorPrice",
+        "type": "uint96"
+      }
+    ],
+    "name": "InvalidDutchPrices",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "recipient",
         "type": "address"
@@ -296,6 +312,27 @@ export const auctionHouseAbi = [
       }
     ],
     "name": "ValueTooLarge",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "auctionId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "enum AuctionCore.Format",
+        "name": "expected",
+        "type": "uint8"
+      },
+      {
+        "internalType": "enum AuctionCore.Format",
+        "name": "actual",
+        "type": "uint8"
+      }
+    ],
+    "name": "WrongFormat",
     "type": "error"
   },
   {
@@ -432,7 +469,7 @@ export const auctionHouseAbi = [
       },
       {
         "indexed": false,
-        "internalType": "enum AuctionHouse.Status",
+        "internalType": "enum AuctionCore.Status",
         "name": "outcome",
         "type": "uint8"
       }
@@ -823,6 +860,19 @@ export const auctionHouseAbi = [
         "type": "uint256"
       }
     ],
+    "name": "buy",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "auctionId",
+        "type": "uint256"
+      }
+    ],
     "name": "buyNow",
     "outputs": [],
     "stateMutability": "payable",
@@ -891,6 +941,64 @@ export const auctionHouseAbi = [
       }
     ],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "nft",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint96",
+        "name": "startPrice",
+        "type": "uint96"
+      },
+      {
+        "internalType": "uint96",
+        "name": "floorPrice",
+        "type": "uint96"
+      },
+      {
+        "internalType": "uint64",
+        "name": "duration",
+        "type": "uint64"
+      }
+    ],
+    "name": "createDutchAuction",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "auctionId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "auctionId",
+        "type": "uint256"
+      }
+    ],
+    "name": "currentPrice",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -998,12 +1106,17 @@ export const auctionHouseAbi = [
             "type": "uint16"
           },
           {
-            "internalType": "enum AuctionHouse.Status",
+            "internalType": "enum AuctionCore.Status",
             "name": "status",
+            "type": "uint8"
+          },
+          {
+            "internalType": "enum AuctionCore.Format",
+            "name": "format",
             "type": "uint8"
           }
         ],
-        "internalType": "struct AuctionHouse.Auction",
+        "internalType": "struct AuctionCore.Auction",
         "name": "",
         "type": "tuple"
       }
@@ -1089,12 +1202,17 @@ export const auctionHouseAbi = [
             "type": "uint16"
           },
           {
-            "internalType": "enum AuctionHouse.Status",
+            "internalType": "enum AuctionCore.Status",
             "name": "status",
+            "type": "uint8"
+          },
+          {
+            "internalType": "enum AuctionCore.Format",
+            "name": "format",
             "type": "uint8"
           }
         ],
-        "internalType": "struct AuctionHouse.Auction[]",
+        "internalType": "struct AuctionCore.Auction[]",
         "name": "page",
         "type": "tuple[]"
       }

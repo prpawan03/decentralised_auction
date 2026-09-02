@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TickerProvider } from "@/hooks/useTicker";
 import { zeroAddress, type Address } from "viem";
-import { AuctionStatus, type Auction } from "@/lib/auction";
+import { AuctionFormat, AuctionStatus, type Auction } from "@/lib/auction";
 
 /**
  * Test harness.
@@ -63,6 +63,9 @@ export function makeAuction(overrides: Partial<Auction> = {}): Auction {
     minIncrementBps: 500,
     platformFeeBps: 250,
     status: AuctionStatus.Live,
+    /* English unless a test says otherwise: it is the format every existing
+       fixture was written against. */
+    format: AuctionFormat.English,
     ...overrides,
   };
 }

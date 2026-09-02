@@ -19,6 +19,25 @@ export const AuctionStatus = {
 
 export type AuctionStatusValue = (typeof AuctionStatus)[keyof typeof AuctionStatus];
 
+/**
+ * Mirrors `enum Format { English, Dutch }`.
+ *
+ * Which rules discover the price. It decides which entry point a listing
+ * accepts — `bid`/`buyNow` for English, `buy` for Dutch — and the contract
+ * rejects a call through the wrong one, so the UI must not offer it.
+ *
+ * The two price fields are read under different names per format: on a Dutch
+ * listing `reservePrice` is the FLOOR the price decays to and `buyNowPrice` is
+ * the OPENING price. Reading them as an English reserve and buy-now would
+ * misdescribe the sale.
+ */
+export const AuctionFormat = {
+  English: 0,
+  Dutch: 1,
+} as const;
+
+export type AuctionFormatValue = (typeof AuctionFormat)[keyof typeof AuctionFormat];
+
 /** The struct as viem decodes it. */
 export interface RawAuction {
   seller: Address;
@@ -34,6 +53,7 @@ export interface RawAuction {
   minIncrementBps: number;
   platformFeeBps: number;
   status: number;
+  format: number;
 }
 
 /** The struct plus its id and everything derived from it. */
@@ -100,13 +120,75 @@ export function isSettleableNow(a: Pick<RawAuction, "status" | "endTime">, now: 
   return a.status === AuctionStatus.Live && secondsRemaining(a, now) <= 0;
 }
 
-export function buyNowEnabled(a: Pick<RawAuction, "buyNowPrice">): boolean {
+export function isDutch(a: Pick<RawAuction, "format">): boolean {
+  return a.format === AuctionFormat.Dutch;
+}
+
+/**
+ * WARNING: English only.
+ *
+ * On a Dutch listing `buyNowPrice` holds the OPENING price, which is never a
+ * buy-now offer — it is where the falling price started, and it is almost
+ * always above what the item can now be bought for. Rendering it as "Buy now"
+ * tells a viewer they can pay that amount, which is both wrong and expensive.
+ * Callers MUST branch on {@link isDutch} first.
+ */
+export function buyNowEnabled(a: Pick<RawAuction, "buyNowPrice" | "format">): boolean {
+  if (isDutch(a)) return false;
   /* `buyNowPrice == 0` means DISABLED, never "free". */
   return a.buyNowPrice > 0n;
 }
 
-export function reserveMet(a: Pick<RawAuction, "highestBid" | "reservePrice">): boolean {
+/**
+ * WARNING: English only.
+ *
+ * A Dutch auction has no reserve to meet. `reservePrice` holds the FLOOR the
+ * price decays to, and any purchase at or above it is a completed sale, so
+ * "reserve not met" is not a state a bought Dutch listing can be in.
+ */
+export function reserveMet(a: Pick<RawAuction, "highestBid" | "reservePrice" | "format">): boolean {
+  if (isDutch(a)) return true;
   return a.reservePrice === 0n || a.highestBid >= a.reservePrice;
+}
+
+/** The opening price of a Dutch listing: where the decay started. */
+export function dutchStartPrice(a: Pick<RawAuction, "buyNowPrice">): bigint {
+  return a.buyNowPrice;
+}
+
+/** The floor of a Dutch listing: the lowest the price will ever reach. */
+export function dutchFloorPrice(a: Pick<RawAuction, "reservePrice">): bigint {
+  return a.reservePrice;
+}
+
+/**
+ * The client-side mirror of `currentPrice(auctionId)`.
+ *
+ * This MUST match `DutchAuction._currentPrice` exactly, including the flooring
+ * of the integer division — a UI that rounds differently from the contract
+ * would quote a price the `buy` call then rejects as underpayment. The whole
+ * computation is therefore in bigint, never through Number.
+ *
+ * It is still only a hint: it reads the browser clock, and the contract reads
+ * the block timestamp. The buy path overpays deliberately and relies on the
+ * contract refunding the excess, so a clock a few seconds out costs nothing.
+ */
+export function dutchPriceAt(
+  a: Pick<RawAuction, "reservePrice" | "buyNowPrice" | "startTime" | "endTime">,
+  now: number,
+): bigint {
+  const start = a.buyNowPrice;
+  const floor = a.reservePrice;
+  const clock = BigInt(Math.floor(now));
+
+  /* Both bounds are inclusive in the contract, and they are checked before any
+     subtraction so neither can underflow. */
+  if (clock <= a.startTime) return start;
+  if (clock >= a.endTime) return floor;
+
+  const elapsed = clock - a.startTime;
+  const span = a.endTime - a.startTime;
+  return start - ((start - floor) * elapsed) / span;
 }
 
 /**

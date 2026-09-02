@@ -3,6 +3,8 @@ pragma solidity 0.8.36;
 
 import {AuctionHouseBase} from "./AuctionHouseBase.t.sol";
 import {AuctionHouse} from "../src/AuctionHouse.sol";
+import {EnglishAuction} from "../src/formats/EnglishAuction.sol";
+import {AuctionCore} from "../src/core/AuctionCore.sol";
 
 /**
  * @title AuctionHouseTest
@@ -21,11 +23,11 @@ contract AuctionHouseTest is AuctionHouseBase {
     function test_CreateAuction_EscrowsNftAndOpensLive() public {
         (uint256 id, uint256 tokenId) = _listSimple(seller);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.seller, seller);
         assertEq(auction.nft, address(nft));
         assertEq(auction.tokenId, tokenId);
-        assertEq(uint8(auction.status), uint8(AuctionHouse.Status.Live));
+        assertEq(uint8(auction.status), uint8(AuctionCore.Status.Live));
         assertEq(auction.startTime, uint64(START_TIME));
         assertEq(auction.endTime, uint64(START_TIME + 1 hours));
         assertEq(auction.minIncrementBps, house.DEFAULT_INCREMENT_BPS());
@@ -45,7 +47,7 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         vm.prank(seller);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.DurationOutOfRange.selector, uint64(59), minDuration, maxDuration)
+            abi.encodeWithSelector(AuctionCore.DurationOutOfRange.selector, uint64(59), minDuration, maxDuration)
         );
         house.createAuction(address(nft), tokenId, 0, 0, 59);
     }
@@ -58,7 +60,7 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         vm.prank(seller);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.DurationOutOfRange.selector, tooLong, minDuration, maxDuration)
+            abi.encodeWithSelector(AuctionCore.DurationOutOfRange.selector, tooLong, minDuration, maxDuration)
         );
         house.createAuction(address(nft), tokenId, 0, 0, tooLong);
     }
@@ -66,7 +68,7 @@ contract AuctionHouseTest is AuctionHouseBase {
     function test_RevertWhen_BuyNowIsBelowReserve() public {
         uint256 tokenId = _mintAndApprove(seller);
         vm.prank(seller);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidBuyNowPrice.selector, uint96(1 ether), uint96(2 ether)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.InvalidBuyNowPrice.selector, uint96(1 ether), uint96(2 ether)));
         house.createAuction(address(nft), tokenId, 2 ether, 1 ether, 1 hours);
     }
 
@@ -74,12 +76,12 @@ contract AuctionHouseTest is AuctionHouseBase {
         uint256 tokenId = _mintAndApprove(seller);
         uint96 dust = house.MIN_INCREMENT() - 1;
         vm.prank(seller);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidBuyNowPrice.selector, dust, uint96(0)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.InvalidBuyNowPrice.selector, dust, uint96(0)));
         house.createAuction(address(nft), tokenId, 0, dust, 1 hours);
     }
 
     function test_RevertWhen_AuctionIdDoesNotExist() public {
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.AuctionNotFound.selector, uint256(7)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.AuctionNotFound.selector, uint256(7)));
         house.getAuction(7);
     }
 
@@ -120,7 +122,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         assertEq(required, 1.05 ether);
 
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BidTooLow.selector, required, uint256(1.04 ether)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.BidTooLow.selector, required, uint256(1.04 ether)));
         house.bid{value: 1.04 ether}(id);
     }
 
@@ -130,7 +132,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.warp(START_TIME + 1 hours);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.AuctionAlreadyEnded.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.AuctionAlreadyEnded.selector, id));
         house.bid{value: 1 ether}(id);
     }
 
@@ -141,7 +143,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         house.bid{value: 1 ether}(id);
 
         vm.prank(alice);
-        vm.expectRevert(AuctionHouse.AlreadyHighestBidder.selector);
+        vm.expectRevert(AuctionCore.AlreadyHighestBidder.selector);
         house.bid{value: 2 ether}(id);
     }
 
@@ -177,7 +179,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(alice);
         house.bid{value: 1 ether}(id);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.endTime, uint64(snipeAt + house.ANTI_SNIPE_WINDOW()));
         assertEq(auction.extensionCount, 1);
     }
@@ -188,7 +190,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(alice);
         house.bid{value: 1 ether}(id);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.endTime, uint64(START_TIME + 1 hours));
         assertEq(auction.extensionCount, 0);
     }
@@ -221,7 +223,7 @@ contract AuctionHouseTest is AuctionHouseBase {
      *         extension, because it cannot move the clock.
      * @dev At that instant the candidate end time is exactly the current one, so
      *      the old code applied a zero-length extension and still counted it. An
-     *      attacker could therefore spend all {AuctionHouse.MAX_EXTENSIONS}
+     *      attacker could therefore spend all {EnglishAuction.MAX_EXTENSIONS}
      *      slots from as many addresses in a single block, for the price of gas
      *      alone - every losing bid is refunded in full - and then snipe the
      *      auction with anti-snipe switched off.
@@ -240,7 +242,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(alice);
         house.bid{value: 1 ether}(id);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.endTime, endTime, "a zero-length extension moved the clock");
         assertEq(auction.extensionCount, 0, "the boundary bid burned an extension for free");
 
@@ -252,7 +254,7 @@ contract AuctionHouseTest is AuctionHouseBase {
 
     /**
      * @notice The whole cap cannot be drained at the boundary in one block.
-     * @dev The attack in full: {AuctionHouse.MAX_EXTENSIONS} + 1 addresses, one
+     * @dev The attack in full: {EnglishAuction.MAX_EXTENSIONS} + 1 addresses, one
      *      block, every bid landing on the boundary. Not one of them may count.
      */
     function test_AntiSnipe_CannotBeExhaustedAtTheBoundary() public {
@@ -266,7 +268,7 @@ contract AuctionHouseTest is AuctionHouseBase {
             _bidMinimum(makeAddr(string(abi.encodePacked("snipeMule", vm.toString(i)))), id);
         }
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.extensionCount, 0, "the anti-snipe budget was burned for free");
         assertEq(auction.endTime, endTime);
     }
@@ -281,8 +283,8 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(alice);
         house.buyNow{value: 5 ether}(id);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
-        assertEq(uint8(auction.status), uint8(AuctionHouse.Status.Settled));
+        AuctionCore.Auction memory auction = house.getAuction(id);
+        assertEq(uint8(auction.status), uint8(AuctionCore.Status.Settled));
         assertEq(auction.highestBidder, alice);
         // Invariant 4.
         assertEq(nft.ownerOf(tokenId), alice);
@@ -312,7 +314,7 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.IncorrectPayment.selector, uint256(5 ether), uint256(4 ether))
+            abi.encodeWithSelector(AuctionCore.IncorrectPayment.selector, uint256(5 ether), uint256(4 ether))
         );
         house.buyNow{value: 4 ether}(id);
     }
@@ -326,7 +328,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         // Buy-now closes once bidding passes it, so nobody can take the item
         // for less than the standing bid.
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BuyNowDisabled.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.BuyNowDisabled.selector, id));
         house.buyNow{value: 5 ether}(id);
     }
 
@@ -362,8 +364,8 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         house.settle(id);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
-        assertEq(uint8(auction.status), uint8(AuctionHouse.Status.ReserveNotMet));
+        AuctionCore.Auction memory auction = house.getAuction(id);
+        assertEq(uint8(auction.status), uint8(AuctionCore.Status.ReserveNotMet));
         assertEq(house.pendingReturns(alice), 1 ether, "the bidder was not refunded in full");
         assertEq(house.pendingReturns(seller), 0);
         assertEq(house.pendingReturns(feeSink), 0);
@@ -378,14 +380,14 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         house.settle(id);
 
-        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.ReserveNotMet));
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionCore.Status.ReserveNotMet));
         assertEq(nft.ownerOf(tokenId), seller);
     }
 
     function test_RevertWhen_SettlingBeforeEndTime() public {
         (uint256 id, ) = _listSimple(seller);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.AuctionStillRunning.selector, id, uint64(START_TIME + 1 hours))
+            abi.encodeWithSelector(AuctionCore.AuctionStillRunning.selector, id, uint64(START_TIME + 1 hours))
         );
         house.settle(id);
     }
@@ -396,7 +398,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         house.settle(id);
 
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.AuctionNotLive.selector, id, AuctionHouse.Status.ReserveNotMet)
+            abi.encodeWithSelector(AuctionCore.AuctionNotLive.selector, id, AuctionCore.Status.ReserveNotMet)
         );
         house.settle(id);
     }
@@ -422,7 +424,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(seller);
         house.cancelAuction(id);
 
-        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.Cancelled));
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionCore.Status.Cancelled));
         assertEq(nft.ownerOf(tokenId), seller);
     }
 
@@ -433,7 +435,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         house.bid{value: 1 ether}(id);
 
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        vm.expectRevert(AuctionCore.AuctionHasBids.selector);
         house.cancelAuction(id);
     }
 
@@ -441,17 +443,17 @@ contract AuctionHouseTest is AuctionHouseBase {
         (uint256 id, ) = _listSimple(seller);
 
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NotSeller.selector, alice, seller));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.NotSeller.selector, alice, seller));
         house.cancelAuction(id);
     }
 
     /**
      * @notice A dust bid below the reserve MUST NOT freeze the listing.
-     * @dev A bid of {AuctionHouse.MIN_INCREMENT} is refunded in full at
+     * @dev A bid of {EnglishAuction.MIN_INCREMENT} is refunded in full at
      *      settlement, so it costs the bidder nothing but gas. While cancelling
      *      required `highestBidder == address(0)`, that one bid locked the
      *      seller's token in escrow for the whole duration - up to
-     *      {AuctionHouse.MAX_DURATION}, thirty days.
+     *      {AuctionCore.MAX_DURATION}, thirty days.
      *
      *      Cancelling below the reserve is now allowed, and the standing bidder
      *      is credited exactly what settlement would have credited them.
@@ -467,7 +469,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(seller);
         house.cancelAuction(id);
 
-        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.Cancelled));
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionCore.Status.Cancelled));
         assertEq(nft.ownerOf(tokenId), seller, "the token stayed frozen in escrow");
         // The dust bidder is made whole, to the wei, out of this auction's escrow.
         assertEq(house.pendingReturns(alice), dust, "the standing bidder was not refunded");
@@ -488,7 +490,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         house.bid{value: 1 ether}(id);
 
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        vm.expectRevert(AuctionCore.AuctionHasBids.selector);
         house.cancelAuction(id);
     }
 
@@ -500,7 +502,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         house.bid{value: house.MIN_INCREMENT()}(id);
 
         vm.prank(seller);
-        vm.expectRevert(AuctionHouse.AuctionHasBids.selector);
+        vm.expectRevert(AuctionCore.AuctionHasBids.selector);
         house.cancelAuction(id);
     }
 
@@ -525,13 +527,13 @@ contract AuctionHouseTest is AuctionHouseBase {
         assertEq(house.pendingReturns(alice), 0);
 
         vm.prank(alice);
-        vm.expectRevert(AuctionHouse.NothingToWithdraw.selector);
+        vm.expectRevert(AuctionCore.NothingToWithdraw.selector);
         house.withdraw();
     }
 
     function test_RevertWhen_WithdrawingWithNoCredit() public {
         vm.prank(stranger);
-        vm.expectRevert(AuctionHouse.NothingToWithdraw.selector);
+        vm.expectRevert(AuctionCore.NothingToWithdraw.selector);
         house.withdraw();
     }
 
@@ -556,7 +558,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         // Invariant 7: settle and withdraw MUST keep working while paused.
         vm.warp(START_TIME + 1 hours);
         house.settle(id);
-        assertEq(uint8(house.getAuction(id).status), uint8(AuctionHouse.Status.Settled));
+        assertEq(uint8(house.getAuction(id).status), uint8(AuctionCore.Status.Settled));
 
         vm.prank(alice);
         assertEq(house.withdraw(), 1 ether);
@@ -576,7 +578,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         uint16 tooMuch = cap + 1;
 
         vm.prank(houseOwner);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.FeeTooHigh.selector, tooMuch, cap));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.FeeTooHigh.selector, tooMuch, cap));
         house.setPlatformFee(tooMuch);
     }
 
@@ -613,7 +615,7 @@ contract AuctionHouseTest is AuctionHouseBase {
      * @dev The fee used at settlement is the one snapshotted into the auction at
      *      listing, not whatever the owner has set by the time it closes. Reading
      *      the live `platformFeeBps` let the owner watch a bid land and then take
-     *      up to {AuctionHouse.MAX_FEE_BPS} of it retroactively.
+     *      up to {AuctionCore.MAX_FEE_BPS} of it retroactively.
      */
     function test_OwnerCannotRepriceALiveAuction() public {
         // Listed at the fixture's 2.5%.
@@ -664,7 +666,7 @@ contract AuctionHouseTest is AuctionHouseBase {
      */
     function test_RevertWhen_FeeRecipientIsTheHouseItself() public {
         vm.prank(houseOwner);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.InvalidFeeRecipient.selector, address(house)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.InvalidFeeRecipient.selector, address(house)));
         house.setFeeRecipient(address(house));
 
         // The old recipient is untouched.
@@ -769,7 +771,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(alice);
         house.bid{value: amount}(id);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.highestBid, amount, "the stored bid does not match the value sent");
         assertEq(auction.highestBidder, alice);
         assertEq(house.escrowOf(id), amount);
@@ -785,7 +787,7 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         vm.deal(alice, uint256(amount) + 1 ether);
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.BidTooLow.selector, floor, uint256(amount)));
+        vm.expectRevert(abi.encodeWithSelector(AuctionCore.BidTooLow.selector, floor, uint256(amount)));
         house.bid{value: amount}(id);
     }
 
@@ -826,7 +828,7 @@ contract AuctionHouseTest is AuctionHouseBase {
         vm.prank(seller);
         uint256 id = house.createAuction(address(nft), tokenId, reserve, buyNow, duration);
 
-        AuctionHouse.Auction memory auction = house.getAuction(id);
+        AuctionCore.Auction memory auction = house.getAuction(id);
         assertEq(auction.reservePrice, reserve);
         assertEq(auction.buyNowPrice, buyNow);
         assertEq(auction.endTime - auction.startTime, duration);
@@ -843,7 +845,7 @@ contract AuctionHouseTest is AuctionHouseBase {
 
         vm.prank(seller);
         vm.expectRevert(
-            abi.encodeWithSelector(AuctionHouse.DurationOutOfRange.selector, duration, minDuration, maxDuration)
+            abi.encodeWithSelector(AuctionCore.DurationOutOfRange.selector, duration, minDuration, maxDuration)
         );
         house.createAuction(address(nft), tokenId, 0, 0, duration);
     }

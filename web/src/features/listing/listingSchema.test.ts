@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { listingSchema, toCreateArgs } from "./listingSchema";
+import { parseEther } from "viem";
+import { listingSchema, toCreateArgs, toCreateCall } from "./listingSchema";
 
 const valid = {
   nft: "0x1234567890abcdef1234567890abcdef12345678",
@@ -107,5 +108,53 @@ describe("toCreateArgs", () => {
       2_000_000_000_000_000_000n,
       600n,
     ]);
+  });
+});
+
+describe("Dutch listings", () => {
+  const dutchValid = { ...valid, format: "dutch" as const, startPrice: "10", floorPrice: "2" };
+
+  it("accepts a falling price", () => {
+    expect(listingSchema.safeParse(dutchValid).success).toBe(true);
+  });
+
+  it("accepts a flat listing where the floor equals the opening price", () => {
+    /* The contract allows startPrice == floorPrice, so the form must not be
+       stricter than the chain. */
+    expect(
+      listingSchema.safeParse({ ...dutchValid, startPrice: "3", floorPrice: "3" }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an opening price of zero", () => {
+    /* Mirrors InvalidDutchPrices: it would be on sale for nothing immediately. */
+    expect(listingSchema.safeParse({ ...dutchValid, startPrice: "0" }).success).toBe(false);
+  });
+
+  it("rejects a floor above the opening price, which would make the price rise", () => {
+    expect(
+      listingSchema.safeParse({ ...dutchValid, startPrice: "1", floorPrice: "5" }).success,
+    ).toBe(false);
+  });
+
+  it("does not apply the English buy-now rule to a Dutch listing", () => {
+    /* buyNowPrice is unused for Dutch; leaving it at its default must not
+       trip the ascending-format cross-field check. */
+    const parsed = listingSchema.safeParse({ ...dutchValid, reservePrice: "9", buyNowPrice: "0" });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("maps to createDutchAuction with start BEFORE floor", () => {
+    /* The two entry points take their prices in opposite orders. Getting this
+       backwards would list every item with an inverted price curve. */
+    const call = toCreateCall(listingSchema.parse(dutchValid));
+    expect(call.functionName).toBe("createDutchAuction");
+    expect(call.args[2]).toBe(parseEther("10")); // start
+    expect(call.args[3]).toBe(parseEther("2")); // floor
+  });
+
+  it("still routes an English listing to createAuction", () => {
+    const call = toCreateCall(listingSchema.parse(valid));
+    expect(call.functionName).toBe("createAuction");
   });
 });

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { zeroAddress } from "viem";
 import {
+  AuctionFormat,
   AuctionStatus,
+  dutchFloorPrice,
+  dutchPriceAt,
+  dutchStartPrice,
+  isDutch,
   buyNowEnabled,
   estimateMinimumBid,
   hasBid,
@@ -14,6 +19,7 @@ import {
   standingOf,
   withIds,
 } from "./auction";
+import type { Auction } from "./auction";
 import { accounts, makeAuction, NOW } from "@/test/utils";
 
 describe("phaseOf", () => {
@@ -136,5 +142,84 @@ describe("withIds", () => {
     const page = [makeAuction(), makeAuction(), makeAuction()];
     const result = withIds(page, 10n);
     expect(result.map((a) => a.id)).toEqual([10n, 11n, 12n]);
+  });
+});
+
+describe("Dutch format", () => {
+  /* Mirrors DutchAuction._currentPrice: buyNowPrice is the OPENING price and
+     reservePrice is the FLOOR. A 100-second window from 10 ETH down to 2 ETH. */
+  const dutch = (over: Partial<Auction> = {}) =>
+    makeAuction({
+      format: AuctionFormat.Dutch,
+      buyNowPrice: 10_000_000_000_000_000_000n,
+      reservePrice: 2_000_000_000_000_000_000n,
+      startTime: BigInt(NOW),
+      endTime: BigInt(NOW + 100),
+      highestBidder: accounts.zero,
+      highestBid: 0n,
+      ...over,
+    });
+
+  it("quotes the opening price at or before the start, and the floor at or after the end", () => {
+    const a = dutch();
+    expect(dutchPriceAt(a, NOW - 50)).toBe(a.buyNowPrice);
+    expect(dutchPriceAt(a, NOW)).toBe(a.buyNowPrice);
+    expect(dutchPriceAt(a, NOW + 100)).toBe(a.reservePrice);
+    expect(dutchPriceAt(a, NOW + 5_000)).toBe(a.reservePrice);
+  });
+
+  it("decays linearly between the two", () => {
+    const a = dutch();
+    /* Half way through a 10 -> 2 ETH slide is 6 ETH. */
+    expect(dutchPriceAt(a, NOW + 50)).toBe(6_000_000_000_000_000_000n);
+    expect(dutchPriceAt(a, NOW + 25)).toBe(8_000_000_000_000_000_000n);
+    expect(dutchPriceAt(a, NOW + 75)).toBe(4_000_000_000_000_000_000n);
+  });
+
+  it("never rises as time passes", () => {
+    /* Monotonicity is the property a buyer relies on: waiting must never cost
+       more. An off-by-one in the flooring would break it at some tick. */
+    const a = dutch();
+    let previous = dutchPriceAt(a, NOW);
+    for (let t = 1; t <= 100; t += 1) {
+      const price = dutchPriceAt(a, NOW + t);
+      expect(price).toBeLessThanOrEqual(previous);
+      previous = price;
+    }
+  });
+
+  it("floors the division exactly as the contract does, never rounding up", () => {
+    /* A span that does not divide evenly. The contract computes
+       start - ((start - floor) * elapsed) / span with integer division, so the
+       quote must land at or ABOVE the true real-valued price — quoting below
+       it would underpay and revert. */
+    const a = dutch({ buyNowPrice: 100n, reservePrice: 1n, endTime: BigInt(NOW + 7) });
+    for (let t = 1; t < 7; t += 1) {
+      const expected = 100n - (99n * BigInt(t)) / 7n;
+      expect(dutchPriceAt(a, NOW + t)).toBe(expected);
+    }
+  });
+
+  it("handles a flat listing where the opening price equals the floor", () => {
+    const a = dutch({ buyNowPrice: 5n, reservePrice: 5n });
+    expect(dutchPriceAt(a, NOW + 50)).toBe(5n);
+  });
+
+  it("refuses to describe a Dutch listing with English vocabulary", () => {
+    /* The bug this closes: the grid read buyNowPrice as a buy-now offer and
+       reservePrice as a reserve, so a Dutch lot advertised its OPENING price
+       as a price you could pay right now. */
+    const a = dutch();
+    expect(isDutch(a)).toBe(true);
+    expect(buyNowEnabled(a)).toBe(false);
+    expect(reserveMet(a)).toBe(true);
+    expect(dutchStartPrice(a)).toBe(a.buyNowPrice);
+    expect(dutchFloorPrice(a)).toBe(a.reservePrice);
+  });
+
+  it("leaves the English readings untouched", () => {
+    const english = makeAuction({ format: AuctionFormat.English, buyNowPrice: 9n });
+    expect(isDutch(english)).toBe(false);
+    expect(buyNowEnabled(english)).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ pragma solidity 0.8.36;
 import {Test} from "forge-std/Test.sol";
 
 import {AuctionHouse} from "../src/AuctionHouse.sol";
+import {AuctionCore} from "../src/core/AuctionCore.sol";
 import {DemoNFT} from "../src/DemoNFT.sol";
 import {AuctionHandler} from "./mocks/AuctionHandler.sol";
 
@@ -77,8 +78,8 @@ contract AuctionHouseInvariantTest is Test {
     function invariant_EscrowMatchesAuctionState() public view {
         uint256 count = house.totalAuctions();
         for (uint256 i = 0; i < count; ++i) {
-            AuctionHouse.Auction memory auction = house.getAuction(i);
-            if (auction.status == AuctionHouse.Status.Live) {
+            AuctionCore.Auction memory auction = house.getAuction(i);
+            if (auction.status == AuctionCore.Status.Live) {
                 assertEq(house.escrowOf(i), auction.highestBid, "rule 7: live escrow drifted from the leading bid");
             } else {
                 assertEq(house.escrowOf(i), 0, "rule 7: a closed auction still holds escrow");
@@ -90,10 +91,10 @@ contract AuctionHouseInvariantTest is Test {
     function invariant_ClosedAuctionsDeliveredTheNft() public view {
         uint256 count = house.totalAuctions();
         for (uint256 i = 0; i < count; ++i) {
-            AuctionHouse.Auction memory auction = house.getAuction(i);
-            if (auction.status == AuctionHouse.Status.Settled) {
+            AuctionCore.Auction memory auction = house.getAuction(i);
+            if (auction.status == AuctionCore.Status.Settled) {
                 assertEq(nft.ownerOf(auction.tokenId), auction.highestBidder, "invariant 4: the winner has no token");
-            } else if (auction.status != AuctionHouse.Status.Live) {
+            } else if (auction.status != AuctionCore.Status.Live) {
                 assertEq(nft.ownerOf(auction.tokenId), auction.seller, "invariant 4: the seller has no token back");
             }
         }
@@ -104,7 +105,7 @@ contract AuctionHouseInvariantTest is Test {
     function invariant_LeaderAndBidAgree() public view {
         uint256 count = house.totalAuctions();
         for (uint256 i = 0; i < count; ++i) {
-            AuctionHouse.Auction memory auction = house.getAuction(i);
+            AuctionCore.Auction memory auction = house.getAuction(i);
             if (auction.highestBidder == address(0)) {
                 assertEq(auction.highestBid, 0, "a bid exists with no bidder");
             } else {
@@ -144,7 +145,21 @@ contract AuctionHouseInvariantTest is Test {
         handler.handleWithdraw(1);
         assertEq(handler.withdrawCalls(), 1, "the handler could not withdraw");
 
-        // And the accounting still lines up after that whole sequence.
+        // The descending format, driven the same way. This is the assertion
+        // that stops the Dutch invariant coverage being vacuous: a handler
+        // that silently never fires would leave every invariant passing while
+        // proving nothing at all about `buy`.
+        handler.handleCreateDutchAuction(2, 10 ether, 1 ether, 1 hours);
+        assertEq(handler.dutchCreateCalls(), 1, "the handler could not create a Dutch auction");
+
+        // An odd overpay seed, so this also exercises the excess-to-credit
+        // path that no other action produces.
+        handler.handleBuyDutch(3, house.totalAuctions() - 1, 3);
+        assertEq(handler.buyDutchCalls(), 1, "the handler could not buy a Dutch listing");
+
+        // And the accounting still lines up after that whole sequence,
+        // including the overpayment, which is credited rather than returned
+        // and so must still be sitting in the house.
         assertEq(address(house).balance, handler.totalDeposited() - handler.totalWithdrawn());
     }
 
@@ -153,8 +168,8 @@ contract AuctionHouseInvariantTest is Test {
     function _sumLiveEscrow() private view returns (uint256 total) {
         uint256 count = house.totalAuctions();
         for (uint256 i = 0; i < count; ++i) {
-            AuctionHouse.Auction memory auction = house.getAuction(i);
-            if (auction.status == AuctionHouse.Status.Live) {
+            AuctionCore.Auction memory auction = house.getAuction(i);
+            if (auction.status == AuctionCore.Status.Live) {
                 total += auction.highestBid;
             }
         }

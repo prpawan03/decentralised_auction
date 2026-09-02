@@ -2,7 +2,8 @@ import { useAuctionActivity } from "@/hooks/useAuctionEvents";
 import { useNow } from "@/hooks/useTicker";
 import { Pill } from "@/components/ui/Pill";
 import { formatCountdown } from "@/lib/format";
-import { ENDING_SOON_SECONDS, phaseOf, type Auction } from "@/lib/auction";
+import { ENDING_SOON_SECONDS, isDutch,
+  phaseOf, type Auction } from "@/lib/auction";
 
 /**
  * The anti-snipe indicator.
@@ -28,6 +29,11 @@ export function AntiSnipeBadge({ auction, compact = false }: { auction: Auction;
   const now = useNow();
   const events = useAuctionActivity(auction.id);
   const phase = phaseOf(auction, now);
+
+  /* Anti-snipe is an EnglishAuction rule. A descending listing takes no bids,
+     so there is no deadline to push out and nothing to snipe. Placed after the
+     hooks above so the hook order never varies with the format. */
+  if (isDutch(auction)) return null;
 
   const lastExtension = events.find((e) => e.kind === "extended");
   const justFired = lastExtension !== undefined && now - lastExtension.at <= FLASH_SECONDS;
@@ -90,6 +96,9 @@ export function AntiSnipeExplainer({ auction }: { auction: Auction }) {
   const now = useNow();
   const phase = phaseOf(auction, now);
   const armed = phase === "ending" || phase === "final";
+
+  /* As above: nothing to explain on a format that has no bidding. */
+  if (isDutch(auction)) return null;
 
   return (
     <div className="border-l-2 border-[var(--color-line-strong)] px-4 py-3">
