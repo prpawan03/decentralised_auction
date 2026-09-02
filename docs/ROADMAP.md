@@ -1,7 +1,12 @@
 # Roadmap
 
 Four tracks, agreed 2026-09-02. Track 1 is done. Track 2 is done for English
-and Dutch, with sealed-bid still open. Tracks 3 and 4 are not started.
+and Dutch and merged to `dev`; sealed-bid is the only piece still open. Tracks
+3 and 4 are not started.
+
+**Next session starts here:** sealed-bid needs two decisions before any code —
+first-price or Vickrey second-price, and whether an unrevealed commit forfeits
+its deposit. Everything else on Track 2 is closed.
 
 The architectural decision that governs all contract work: **split into
 modules** — a core settlement contract plus per-format modules. The original
@@ -87,9 +92,13 @@ Decisions worth not re-litigating:
 
 - **Sealed-bid commit–reveal.** Decide first-price vs Vickrey second-price, and
   whether an unrevealed commit forfeits its deposit.
-- **The invariant handler only drives English.** `contracts/test/mocks/AuctionHandler.sol`
-  never calls `createDutchAuction` or `buy`, so the invariant runs prove nothing
-  about the descending format. Extending it is the highest-value next test job.
+- ~~The invariant handler only drives English.~~ **Done.** `AuctionHandler` now
+  has `handleCreateDutchAuction` and `handleBuyDutch`, the latter overpaying on
+  about half its calls so the excess-to-`pendingReturns` path is exercised
+  rather than merely reachable. `test_HandlerReachesEveryState` asserts both
+  counters, so a handler that silently stopped firing fails loudly instead of
+  leaving the invariants vacuously green. `handleBid` and `handleBuyNow` gained
+  format guards, without which a Dutch listing in the book made them revert.
 - ~~No frontend for Dutch yet.~~ **Done** — see below.
 
 ### Dutch frontend ✅ done
@@ -119,13 +128,27 @@ Decisions worth not re-litigating:
 - **The falling price carries no `aria-live`.** It changes every second, and
   announcing it would make the page unusable with a screen reader (SC 2.2.2).
 
-### Contract wart found while wiring the frontend
+### Contract wart found while wiring the frontend — fixed
 
-`EnglishAuction.minimumBid` has no `_requireFormat` guard, so calling it on a
-Dutch auction returns the English increment formula applied to the Dutch sale
-price — a meaningless number rather than a revert. The UI works around it by
-not showing that stat for Dutch, but the guard belongs in the contract,
-alongside the ones already on `bid`, `buyNow` and `currentPrice`.
+`EnglishAuction.minimumBid` had no `_requireFormat` guard, so on a Dutch
+auction it returned the ascending increment formula applied to a descending
+sale price. It now reverts with `WrongFormat`, like `bid`, `buyNow` and
+`currentPrice`. The frontend already tolerated the failure (`allowFailure` on
+the detail read) and hides the stat for Dutch regardless.
+
+### Demo data
+
+`seed.ts` lists two Dutch auctions — one mid-slope, one near its floor — so the
+format is visible on a first run. Their artwork is an inline `data:` URI, which
+needs no gateway and gives the frontend an inline-metadata token to parse
+beside the remote ones. Verified against a real node: deploy and seed both run
+and the Dutch rows show a falling price.
+
+Its summary table had the same misreading the frontend did, printing
+`buyNowPrice` under "Buy now" and advertising an 8 ETH buy-now for an item
+already asking less. It now prints the live price and the `start -> floor`
+range. `STATUS_NAMES` was also missing `DeliveryFailed`, so status 4 printed as
+`undefined`.
 
 ## Track 3 — Marketplace completeness
 
