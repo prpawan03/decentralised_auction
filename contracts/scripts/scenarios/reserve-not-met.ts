@@ -79,7 +79,9 @@ const leading = await bidAt(ctx, cast.dev, auctionId, {
   at: outbid.at + 2,
   amount: parseEther("3.4"),
 });
-log(`  ${ctx.nameOf(cast.dev.account.address)} bid ${formatEther(leading.amount)} ETH and took the lead.`);
+log(
+  `  ${ctx.nameOf(cast.dev.account.address)} bid ${formatEther(leading.amount)} ETH and took the lead.`,
+);
 log(`  Both are below the ${formatEther(RESERVE)} ETH reserve, so neither can win.`);
 
 require_(
@@ -175,9 +177,15 @@ await house.simulate.withdraw({ account: cast.dev.account.address });
 await house.simulate.withdraw({ account: cast.cara.account.address });
 
 heading("Pending balances");
-log(`  ${ctx.nameOf(cast.dev.account.address)}   ${formatEther(creditAfter.leader)} ETH  (refunded in full at settlement)`);
-log(`  ${ctx.nameOf(cast.cara.account.address)}  ${formatEther(creditAfter.outbid)} ETH  (credited the moment they were outbid)`);
-log(`  ${ctx.nameOf(cast.ben.account.address)}   ${formatEther(creditAfter.seller)} ETH  (the seller earned nothing, and got the token back)`);
+log(
+  `  ${ctx.nameOf(cast.dev.account.address)}   ${formatEther(creditAfter.leader)} ETH  (refunded in full at settlement)`,
+);
+log(
+  `  ${ctx.nameOf(cast.cara.account.address)}  ${formatEther(creditAfter.outbid)} ETH  (credited the moment they were outbid)`,
+);
+log(
+  `  ${ctx.nameOf(cast.ben.account.address)}   ${formatEther(creditAfter.seller)} ETH  (the seller earned nothing, and got the token back)`,
+);
 log("  Both withdrawals simulate cleanly and are left unclaimed, so the claim can be shown live.");
 
 await report(

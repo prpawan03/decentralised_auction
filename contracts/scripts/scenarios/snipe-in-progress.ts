@@ -82,7 +82,9 @@ const honest = await bidAt(ctx, cast.ben, auctionId, {
   at: (await chainNow(ctx)) + 1,
   amount: parseEther("2"),
 });
-log(`  ${ctx.nameOf(cast.ben.account.address)} bid ${formatEther(honest.amount)} ETH at ${honest.at}.`);
+log(
+  `  ${ctx.nameOf(cast.ben.account.address)} bid ${formatEther(honest.amount)} ETH at ${honest.at}.`,
+);
 log(`  That is ${originalClose - honest.at}s before the close, outside the window.`);
 
 const afterHonest = await house.read.getAuction([auctionId]);
@@ -139,10 +141,7 @@ require_(
     ` ${before.extensionCount + 1}, found ${after.extensionCount}. The anti-snipe` +
     ` rule did not fire, so this scenario demonstrates nothing.`,
 );
-require_(
-  after.endTime > before.endTime,
-  `the close time did not move: still ${after.endTime}.`,
-);
+require_(after.endTime > before.endTime, `the close time did not move: still ${after.endTime}.`);
 // The rule is exact, not approximate: a bid inside the window sets the close to
 // one full window from the BID, never a relative nudge. Asserting the precise
 // value is what would catch the rule being weakened to something softer.

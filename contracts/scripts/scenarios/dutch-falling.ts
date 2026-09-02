@@ -1,40 +1,35 @@
 import { formatEther, parseEther } from "viem";
 
-import {
-  Status,
-  connect,
-  heading,
-  listDutch,
-  log,
-  report,
-  require_,
-} from "./_shared.js";
+import { Status, connect, heading, listDutch, log, report, require_ } from "./_shared.js";
 
 /**
  * SCENARIO: a descending-price sale, caught mid-decay.
  *
- * Runs a Dutch clock down from {@link START_PRICE} towards {@link FLOOR_PRICE}
- * and stops it partway, so the UI shows a price that has visibly fallen and has
- * further to fall.
+ * Opens a Dutch auction at {@link START_PRICE}, runs its clock partway down
+ * towards {@link FLOOR_PRICE}, and stops. The UI then shows a price that has
+ * visibly fallen and still has somewhere to go.
  *
  *   npx hardhat run scripts/scenarios/dutch-falling.ts --network localhost
  *
- * HOW THE FALL IS PRODUCED, AND WHY IT LOOKS LIKE THIS.
- * `contracts/src/AuctionHouse.sol` is an ascending-price contract. There is no
- * `Format` enum, no `DutchAuction.sol` and no `currentPrice()` view, and
- * `buyNowPrice` is fixed for the life of a listing - so no single auction in
- * this deployment can show a number that goes down. {listDutch} therefore walks
- * a LADDER: each rung is a real auction on the same escrowed token at a lower
- * price, and the seller cancels a rung to open the next one down. It probes for
- * a native Dutch format first and refuses to run the emulation if one appears,
- * so this script starts telling the truth the day that contract lands.
+ * HOW THE FALL IS PRODUCED
+ * It is not produced at all -- it is read. `DutchAuction.currentPrice` is a
+ * pure function of `block.timestamp`, so moving the chain's clock IS moving the
+ * price. This script does nothing but list, fast-forward, and check.
  *
- * The emulation is faithful rather than convenient. A Dutch clock is a sequence
- * of take-it-or-leave-it prices, and setting each rung's `reservePrice` equal to
- * its `buyNowPrice` reproduces exactly that: a bid below the clock price can
- * never win, and the seller can still step the clock past it. Every walked rung
- * stays in the book as `Cancelled`, so the decay is visible history instead of a
- * number that changed with no trace.
+ * That is worth stating because an earlier version of this scenario could not
+ * do it. Before the format split there was only an ascending contract, so the
+ * decay had to be faked with a ladder of cancelled auctions at descending
+ * prices. The two look similar in a screenshot and are not the same thing: a
+ * ladder is N auction ids and N-1 cancellations in the book, while the real
+ * format is ONE listing whose price is a function of time. Everything
+ * downstream -- the UI, the indexer, any leaderboard -- sees the difference.
+ *
+ * HOW A DUTCH SALE IS BOUGHT
+ * With `buy(auctionId)` at `currentPrice(auctionId)`. NOT with `bid()`, which
+ * reverts with `WrongFormat`, and NOT at `buyNowPrice`, which on a Dutch record
+ * holds the START price rather than the price a buyer pays now. Overpayment is
+ * accepted and credited back, so a buyer racing the clock down cannot lose the
+ * difference.
  */
 
 /** The opening clock price. */
@@ -43,128 +38,115 @@ const START_PRICE = parseEther(process.env.SCENARIO_DUTCH_START ?? "8");
 /** Where the clock stops falling. A Dutch sale has a floor, not a free fall. */
 const FLOOR_PRICE = parseEther(process.env.SCENARIO_DUTCH_FLOOR ?? "2");
 
-/** Rungs in the full ladder, start and floor included. Seven gives 1 ETH steps. */
-const STEPS = 7;
-
-/** Seconds the clock rests on each rung. */
-const STEP_SECONDS = 45;
+/** How long the clock takes to walk the whole way down. */
+const DURATION = 1800n;
 
 /**
- * How many rungs to walk before stopping.
+ * Seconds of decay to run off before handing over.
  *
- * Deliberately short of {@link STEPS}: the point of the scenario is a price
- * caught in motion, so the clock has to have somewhere left to go.
+ * Deliberately well inside {@link DURATION}: the point of the scenario is a
+ * price caught in motion. At 0 it is just an expensive listing; at DURATION it
+ * is sitting on its floor. A third of the way down reads as obviously falling
+ * while leaving plenty of room to watch it keep going.
  */
-const WALK = 4;
-
-/** Half an hour on the live rung, so the demo is not racing a countdown. */
-const DURATION = 1800n;
+const ELAPSED = Number(process.env.SCENARIO_DUTCH_ELAPSED ?? 600);
 
 const ctx = await connect("dutch-falling");
 const { cast, house, nft } = ctx;
 
-require_(WALK < STEPS, `WALK (${WALK}) must be below STEPS (${STEPS}) to stop mid-decay.`);
-
 // ---------------------------------------------------------------------------
-// Run the clock down
+// List and run the clock down
 // ---------------------------------------------------------------------------
 
 heading("Running the clock down");
 
-const ladder = await listDutch(ctx, cast.cara, {
+const sale = await listDutch(ctx, cast.cara, {
   startPrice: START_PRICE,
   floorPrice: FLOOR_PRICE,
-  steps: STEPS,
-  stepSeconds: STEP_SECONDS,
-  walk: WALK,
   duration: DURATION,
+  elapsed: ELAPSED,
 });
 
-log(`  Mode: ${ladder.mode} (see listDutch in _shared.ts for why).`);
-log(`  Token #${ladder.tokenId}, carried down every rung by ${ctx.nameOf(cast.cara.account.address)}.`);
-
-for (const rung of ladder.rungs) {
-  const live = rung.auctionId === ladder.live.auctionId;
-  log(
-    `    +${String(rung.openedAfter).padStart(3)}s  ${formatEther(rung.price).padStart(6)} ETH` +
-      `  auction #${rung.auctionId}${live ? "   <- the clock is here" : ""}`,
-  );
-}
-for (const [index, price] of ladder.remaining.entries()) {
-  const at = ladder.live.openedAfter + (index + 1) * STEP_SECONDS;
-  log(`    +${String(at).padStart(3)}s  ${formatEther(price).padStart(6)} ETH  (not reached yet)`);
-}
+log(
+  `  Auction #${sale.auctionId}, token #${sale.tokenId}, listed by ${ctx.nameOf(cast.cara.account.address)}.`,
+);
+log(`    opened at   ${formatEther(sale.startPrice).padStart(6)} ETH`);
+log(
+  `    now reads   ${formatEther(sale.currentPrice).padStart(6)} ETH  (after ${sale.elapsed}s of decay)`,
+);
+log(`    floor at    ${formatEther(sale.floorPrice).padStart(6)} ETH`);
 
 // ---------------------------------------------------------------------------
 // Verify
 // ---------------------------------------------------------------------------
 
-const live = await house.read.getAuction([ladder.live.auctionId]);
+const record = await house.read.getAuction([sale.auctionId]);
 
-require_(live.status === Status.Live, `the current rung is ${live.status}, not Live.`);
+require_(record.status === Status.Live, `the auction is ${record.status}, not Live.`);
+
+// On a Dutch record the stored prices are the ENDS of the ramp, not the current
+// price. Asserting that keeps the scenario honest about which number is which:
+// a reader who takes buyNowPrice for the clock price would be 6 ETH wrong here.
 require_(
-  live.buyNowPrice === ladder.live.price,
-  `the live rung should be priced at ${formatEther(ladder.live.price)} ETH,` +
-    ` the chain says ${formatEther(live.buyNowPrice)}.`,
-);
-// Reserve equal to price is what makes it a Dutch sale rather than an English
-// one with a buy-now attached: there is no winning bid below the clock.
-require_(
-  live.reservePrice === live.buyNowPrice,
-  `the live rung's reserve (${formatEther(live.reservePrice)} ETH) must equal its price` +
-    ` (${formatEther(live.buyNowPrice)} ETH), or a bid under the clock could win.`,
+  record.buyNowPrice === START_PRICE,
+  `buyNowPrice should hold the START price (${formatEther(START_PRICE)} ETH), the chain` +
+    ` says ${formatEther(record.buyNowPrice)} ETH.`,
 );
 require_(
-  live.buyNowPrice < START_PRICE && live.buyNowPrice > FLOOR_PRICE,
-  `the clock is at ${formatEther(live.buyNowPrice)} ETH, which is not between the` +
-    ` ${formatEther(START_PRICE)} ETH start and the ${formatEther(FLOOR_PRICE)} ETH floor.` +
-    ` The scenario is meant to stop mid-decay.`,
-);
-require_(
-  live.highestBidder === "0x0000000000000000000000000000000000000000",
-  `the live rung already carries a bid from ${ctx.nameOf(live.highestBidder)}; the` +
-    ` clock cannot be stepped down past a bid that meets its price.`,
+  record.reservePrice === FLOOR_PRICE,
+  `reservePrice should hold the FLOOR (${formatEther(FLOOR_PRICE)} ETH), the chain says` +
+    ` ${formatEther(record.reservePrice)} ETH.`,
 );
 
-// Every earlier rung must be closed, or the book shows the same token for sale
-// at several prices at once.
-for (const rung of ladder.rungs.slice(0, -1)) {
-  const walked = await house.read.getAuction([rung.auctionId]);
-  require_(
-    walked.status === Status.Cancelled,
-    `rung #${rung.auctionId} at ${formatEther(rung.price)} ETH is ${walked.status},` +
-      ` not Cancelled. Two rungs are live at once.`,
-  );
-}
+// The clock has to have actually moved. A decay window misconfigured so that
+// no time passes would otherwise produce a scenario that runs green and shows
+// a static number -- the exact failure this script exists to prevent.
+require_(
+  sale.currentPrice < START_PRICE,
+  `the clock still reads its opening price, so nothing has decayed.`,
+);
+require_(
+  sale.currentPrice > FLOOR_PRICE,
+  `the clock has already reached its floor, so there is nothing left to watch.`,
+);
 
-// The token has to be escrowed against the CURRENT rung, not stranded with the
-// seller after a cancel that never re-listed.
-const tokenOwner = await nft.read.ownerOf([ladder.tokenId]);
+// A Dutch listing takes no bids, so nothing should be standing against it.
+require_(
+  record.highestBidder === "0x0000000000000000000000000000000000000000",
+  `the auction already carries a bid from ${ctx.nameOf(record.highestBidder)}, which a` +
+    ` descending sale should never have before it is bought.`,
+);
+
+// The token must be escrowed, or the listing is an id with nothing behind it.
+const tokenOwner = await nft.read.ownerOf([sale.tokenId]);
 require_(
   tokenOwner.toLowerCase() === house.address.toLowerCase(),
-  `token #${ladder.tokenId} is held by ${ctx.nameOf(tokenOwner)} rather than escrowed by the house.`,
+  `token #${sale.tokenId} is held by ${ctx.nameOf(tokenOwner)} rather than escrowed by the house.`,
 );
 
-const fallen = START_PRICE - live.buyNowPrice;
+const fallen = START_PRICE - sale.currentPrice;
+const remaining = sale.currentPrice - FLOOR_PRICE;
 log(
-  `\n  The clock has fallen ${formatEther(fallen)} ETH from ${formatEther(START_PRICE)}` +
-    ` to ${formatEther(live.buyNowPrice)}, with ${ladder.remaining.length} rung(s) left` +
+  `\n  Fallen ${formatEther(fallen)} ETH so far, with ${formatEther(remaining)} ETH left` +
     ` before the ${formatEther(FLOOR_PRICE)} ETH floor.`,
 );
 
 await report(
   ctx,
   [
-    { auctionId: ladder.live.auctionId, note: `Dutch clock, live at ${formatEther(live.buyNowPrice)} ETH` },
-    { auctionId: ladder.rungs[0].auctionId, note: `the opening rung at ${formatEther(START_PRICE)} ETH, now cancelled` },
+    {
+      auctionId: sale.auctionId,
+      note: `Dutch clock, currently ${formatEther(sale.currentPrice)} ETH`,
+    },
   ],
   [
-    `The buy-now price on the live rung: ${formatEther(live.buyNowPrice)} ETH, down from` +
-      ` ${formatEther(START_PRICE)} ETH.`,
-    `The cancelled rungs above it in the book are the decay path, one auction per price.`,
-    `Reserve equals price, so there is no bid that wins below the clock -` +
-      ` a buyer either takes it at ${formatEther(live.buyNowPrice)} ETH or waits for the next rung.`,
-    `Re-run this script to walk the clock further down on a fresh token.`,
+    `The price on auction #${sale.auctionId} falls on its own as blocks are mined -` +
+      ` reload and it will read lower.`,
+    `buyNowPrice on this record is ${formatEther(START_PRICE)} ETH, the price it OPENED at.` +
+      ` The live number comes from currentPrice(), not from the struct.`,
+    `Buying is buy(${sale.auctionId}) at the clock price, not bid() - bid() reverts with` +
+      ` WrongFormat on a descending sale.`,
+    `Overpaying is safe: the excess is credited back rather than kept.`,
   ],
 );
 

@@ -27,7 +27,6 @@ import {
 } from "ponder:schema";
 import { zeroAddress } from "viem";
 
-import { auctionHouseAbi } from "../abis/auctionHouse";
 import { upsertAccount, upsertBidder, upsertDaily, upsertSeller } from "./rollups";
 import {
   ANTI_SNIPE_WINDOW,
@@ -53,31 +52,16 @@ ponder.on("AuctionHouse:AuctionCreated", async ({ event, context }) => {
 
   // --- Derive -------------------------------------------------------------
   //
-  // THE EVENT SHOULD CARRY THE FORMAT. `AuctionCreated` does not include
-  // `Format`, so the only way to know whether this is an English or a Dutch
-  // auction is to read the struct back. That is one `eth_call` per auction
-  // ever created, to learn a value the emitting transaction already had in a
-  // stack slot -- and on a backfill it is one blocking round trip in the
-  // middle of the hot loop. Adding `Format format` to the event (one uint8 in
-  // the non-indexed data) would delete this call outright and is the right
-  // fix; this read is the workaround, not the design.
+  // The format comes straight off the event. It used to be read back with
+  // `getAuction`, which cost one `eth_call` PER AUCTION -- a blocking round
+  // trip in the middle of the backfill loop, to learn a value the emitting
+  // transaction already had in a stack slot. `AuctionCreated` now carries
+  // `Format` as a uint8 in its non-indexed data, so the call is gone.
   //
-  // The read is pinned to `event.block.number` by Ponder, so it is replayable
-  // and reorg-safe, and it is cached per (block, calldata).
-  let format = "Unknown";
-  try {
-    const record = await context.client.readContract({
-      abi: auctionHouseAbi,
-      address: event.log.address,
-      functionName: "getAuction",
-      args: [auctionId],
-    });
-    format = decodeEnum(FORMAT, record.format);
-  } catch {
-    // A failed read MUST NOT stop the run. The auction is still real and every
-    // other column is known; `format` stays "Unknown" and the row is written.
-    // Losing one string is better than losing the auction.
-  }
+  // This is also what makes `BidPlaced` legible. One event carries both an
+  // English bid and a Dutch purchase, and the format is the only thing in the
+  // log stream that says which of the two a reader is holding.
+  const format = decodeEnum(FORMAT, event.args.format);
 
   // --- Record -------------------------------------------------------------
   await context.db.insert(auction).values({
@@ -167,11 +151,20 @@ ponder.on("AuctionHouse:BidPlaced", async ({ event, context }) => {
   const secondsBeforeEnd = event.args.endTime - timestamp;
   const isLate = secondsBeforeEnd <= ANTI_SNIPE_WINDOW;
 
-  // Whether THIS bid moved the clock. The `AuctionExtended` handler stamped
-  // its transaction hash on the row a moment ago -- see the field comment on
-  // `auction.lastExtensionTxHash` for why the ordering makes this exact.
+  // Whether THIS bid moved the clock, straight from the event.
+  //
+  // This was previously inferred by comparing the transaction hash the
+  // `AuctionExtended` handler stamped on the row, which made a per-bid fact
+  // depend on two handlers firing in the right order. `BidPlaced.extended`
+  // states it directly, so the ordering no longer matters.
+  //
+  // Note this is NOT the same question as `isLate` above, and both are kept.
+  // `extended` is "did the clock move"; `isLate` is "was this a snipe". They
+  // diverge in exactly the case that matters most: once MAX_EXTENSIONS is
+  // spent, a bid in the final seconds is a textbook snipe that by definition
+  // cannot move the clock.
+  const causedExtension = event.args.extended;
   const current = await context.db.find(auction, { id: auctionId });
-  const causedExtension = current?.lastExtensionTxHash === event.transaction.hash;
 
   // --- Record -------------------------------------------------------------
   await context.db.insert(bid).values({

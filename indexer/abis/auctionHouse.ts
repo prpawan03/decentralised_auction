@@ -27,17 +27,17 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: true,
         internalType: "address",
         name: "seller",
-        type: "address",
-      },
+        type: "address"
+      }
     ],
     name: "AuctionCancelled",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -46,53 +46,59 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: true,
         internalType: "address",
         name: "seller",
-        type: "address",
+        type: "address"
       },
       {
         indexed: true,
         internalType: "address",
         name: "nft",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint256",
         name: "tokenId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: false,
         internalType: "uint96",
         name: "reservePrice",
-        type: "uint96",
+        type: "uint96"
       },
       {
         indexed: false,
         internalType: "uint96",
         name: "buyNowPrice",
-        type: "uint96",
+        type: "uint96"
       },
       {
         indexed: false,
         internalType: "uint64",
         name: "startTime",
-        type: "uint64",
+        type: "uint64"
       },
       {
         indexed: false,
         internalType: "uint64",
         name: "endTime",
-        type: "uint64",
+        type: "uint64"
       },
+      {
+        indexed: false,
+        internalType: "enum AuctionCore.Format",
+        name: "format",
+        type: "uint8"
+      }
     ],
     name: "AuctionCreated",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -101,23 +107,23 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: false,
         internalType: "uint64",
         name: "newEndTime",
-        type: "uint64",
+        type: "uint64"
       },
       {
         indexed: false,
         internalType: "uint32",
         name: "extensionCount",
-        type: "uint32",
-      },
+        type: "uint32"
+      }
     ],
     name: "AuctionExtended",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -126,41 +132,41 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: true,
         internalType: "address",
         name: "winner",
-        type: "address",
+        type: "address"
       },
       {
         indexed: true,
         internalType: "address",
         name: "seller",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint96",
         name: "amount",
-        type: "uint96",
+        type: "uint96"
       },
       {
         indexed: false,
         internalType: "uint96",
         name: "platformFee",
-        type: "uint96",
+        type: "uint96"
       },
       {
         indexed: false,
         internalType: "enum AuctionCore.Status",
         name: "outcome",
-        type: "uint8",
-      },
+        type: "uint8"
+      }
     ],
     name: "AuctionSettled",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -169,41 +175,47 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: true,
         internalType: "address",
         name: "bidder",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint96",
         name: "amount",
-        type: "uint96",
+        type: "uint96"
       },
       {
         indexed: false,
         internalType: "address",
         name: "previousBidder",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint96",
         name: "previousAmount",
-        type: "uint96",
+        type: "uint96"
       },
       {
         indexed: false,
         internalType: "uint64",
         name: "endTime",
-        type: "uint64",
+        type: "uint64"
       },
+      {
+        indexed: false,
+        internalType: "bool",
+        name: "extended",
+        type: "bool"
+      }
     ],
     name: "BidPlaced",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -212,17 +224,17 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "address",
         name: "oldRecipient",
-        type: "address",
+        type: "address"
       },
       {
         indexed: true,
         internalType: "address",
         name: "newRecipient",
-        type: "address",
-      },
+        type: "address"
+      }
     ],
     name: "FeeRecipientUpdated",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -231,29 +243,29 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: true,
         internalType: "address",
         name: "to",
-        type: "address",
+        type: "address"
       },
       {
         indexed: true,
         internalType: "address",
         name: "nft",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint256",
         name: "tokenId",
-        type: "uint256",
-      },
+        type: "uint256"
+      }
     ],
     name: "NftClaimed",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -262,29 +274,29 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: true,
         internalType: "address",
         name: "to",
-        type: "address",
+        type: "address"
       },
       {
         indexed: true,
         internalType: "address",
         name: "nft",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint256",
         name: "tokenId",
-        type: "uint256",
-      },
+        type: "uint256"
+      }
     ],
     name: "NftReleaseFailed",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -293,17 +305,17 @@ export const auctionHouseAbi = [
         indexed: false,
         internalType: "uint16",
         name: "oldBps",
-        type: "uint16",
+        type: "uint16"
       },
       {
         indexed: false,
         internalType: "uint16",
         name: "newBps",
-        type: "uint16",
-      },
+        type: "uint16"
+      }
     ],
     name: "PlatformFeeUpdated",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -312,23 +324,23 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "address",
         name: "account",
-        type: "address",
+        type: "address"
       },
       {
         indexed: true,
         internalType: "uint256",
         name: "auctionId",
-        type: "uint256",
+        type: "uint256"
       },
       {
         indexed: false,
         internalType: "uint256",
         name: "amount",
-        type: "uint256",
-      },
+        type: "uint256"
+      }
     ],
     name: "RefundCredited",
-    type: "event",
+    type: "event"
   },
   {
     anonymous: false,
@@ -337,133 +349,16 @@ export const auctionHouseAbi = [
         indexed: true,
         internalType: "address",
         name: "account",
-        type: "address",
+        type: "address"
       },
       {
         indexed: false,
         internalType: "uint256",
         name: "amount",
-        type: "uint256",
-      },
+        type: "uint256"
+      }
     ],
     name: "Withdrawal",
-    type: "event",
-  },
-  {
-    inputs: [
-      {
-        internalType: "uint256",
-        name: "auctionId",
-        type: "uint256",
-      },
-    ],
-    name: "getAuction",
-    outputs: [
-      {
-        components: [
-          {
-            internalType: "address",
-            name: "seller",
-            type: "address",
-          },
-          {
-            internalType: "uint96",
-            name: "reservePrice",
-            type: "uint96",
-          },
-          {
-            internalType: "address",
-            name: "highestBidder",
-            type: "address",
-          },
-          {
-            internalType: "uint96",
-            name: "highestBid",
-            type: "uint96",
-          },
-          {
-            internalType: "address",
-            name: "nft",
-            type: "address",
-          },
-          {
-            internalType: "uint96",
-            name: "buyNowPrice",
-            type: "uint96",
-          },
-          {
-            internalType: "uint256",
-            name: "tokenId",
-            type: "uint256",
-          },
-          {
-            internalType: "uint64",
-            name: "endTime",
-            type: "uint64",
-          },
-          {
-            internalType: "uint64",
-            name: "startTime",
-            type: "uint64",
-          },
-          {
-            internalType: "uint32",
-            name: "extensionCount",
-            type: "uint32",
-          },
-          {
-            internalType: "uint16",
-            name: "minIncrementBps",
-            type: "uint16",
-          },
-          {
-            internalType: "uint16",
-            name: "platformFeeBps",
-            type: "uint16",
-          },
-          {
-            internalType: "enum AuctionCore.Status",
-            name: "status",
-            type: "uint8",
-          },
-          {
-            internalType: "enum AuctionCore.Format",
-            name: "format",
-            type: "uint8",
-          },
-        ],
-        internalType: "struct AuctionCore.Auction",
-        name: "",
-        type: "tuple",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "platformFeeBps",
-    outputs: [
-      {
-        internalType: "uint16",
-        name: "",
-        type: "uint16",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "totalAuctions",
-    outputs: [
-      {
-        internalType: "uint256",
-        name: "",
-        type: "uint256",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
+    type: "event"
+  }
 ] as const;

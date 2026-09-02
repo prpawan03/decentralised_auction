@@ -86,13 +86,17 @@ const first = await bidAt(ctx, cast.cara, auctionId, {
   at: (await chainNow(ctx)) + 1,
   amount: parseEther("1.5"),
 });
-log(`  ${ctx.nameOf(cast.cara.account.address)} bid ${formatEther(first.amount)} ETH at ${first.at}.`);
+log(
+  `  ${ctx.nameOf(cast.cara.account.address)} bid ${formatEther(first.amount)} ETH at ${first.at}.`,
+);
 
 const second = await bidAt(ctx, cast.dev, auctionId, {
   at: first.at + 2,
   amount: parseEther("2.25"),
 });
-log(`  ${ctx.nameOf(cast.dev.account.address)} bid ${formatEther(second.amount)} ETH at ${second.at}.`);
+log(
+  `  ${ctx.nameOf(cast.dev.account.address)} bid ${formatEther(second.amount)} ETH at ${second.at}.`,
+);
 
 require_(
   second.at < windowOpensAt,
@@ -130,7 +134,10 @@ const final = await ctx.house.read.getAuction([auctionId]);
 const remaining = await ctx.house.read.timeRemaining([auctionId]);
 
 require_(final.status === Status.Live, `expected a Live auction, found ${final.status}.`);
-require_(Number(remaining) === LEAD, `expected ${LEAD}s remaining, the contract says ${remaining}.`);
+require_(
+  Number(remaining) === LEAD,
+  `expected ${LEAD}s remaining, the contract says ${remaining}.`,
+);
 require_(
   (await ctx.house.read.isSettleable([auctionId])) === false,
   "the auction is already settleable, so there is no countdown left to watch.",

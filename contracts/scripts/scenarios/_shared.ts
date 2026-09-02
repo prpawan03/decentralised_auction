@@ -338,162 +338,120 @@ export async function listEnglish(
   return { auctionId, tokenId };
 }
 
-/** One rung of a descending-price ladder. See {@link listDutch}. */
-export interface DutchRung {
-  readonly auctionId: bigint;
-  /** The clock price while this rung was the live one, in wei. */
-  readonly price: bigint;
-  /** Seconds after the ladder opened at which this rung became live. */
-  readonly openedAfter: number;
-}
-
-/** What {@link listDutch} hands back. */
-export interface DutchLadder {
-  /**
-   * `native` when the deployed house exposes a Dutch format of its own,
-   * `stepped` when the price decay is emulated by this helper.
-   */
-  readonly mode: "native" | "stepped";
-  /** The escrowed token, carried down the whole ladder. */
-  readonly tokenId: bigint;
-  /** Every rung walked so far, oldest first. */
-  readonly rungs: readonly DutchRung[];
-  /** The rung that is Live right now - the one the UI shows. */
-  readonly live: DutchRung;
-  /** The price the ladder started at, in wei. */
-  readonly startPrice: bigint;
-  /** The price the ladder stops falling at, in wei. */
-  readonly floorPrice: bigint;
-  /** Rungs below the live one that have not been walked yet, in wei. */
-  readonly remaining: readonly bigint[];
-}
-
 /** Options for {@link listDutch}. */
 export interface DutchOptions {
   /** The opening clock price, in wei. */
   readonly startPrice: bigint;
   /** The price the clock stops falling at, in wei. */
   readonly floorPrice: bigint;
-  /** How many rungs the full ladder has, including start and floor. */
-  readonly steps: number;
-  /** Seconds the clock rests on each rung. */
-  readonly stepSeconds: number;
-  /** How many rungs to walk before stopping, so the UI catches it mid-decay. */
-  readonly walk: number;
-  /** Seconds of bidding on the live rung. */
+  /** How long the clock takes to walk from the start price to the floor. */
   readonly duration: bigint;
+  /**
+   * Seconds of decay to run off before the scenario hands over.
+   *
+   * This is what puts the UI in the interesting state: a Dutch auction at
+   * `elapsed = 0` is just an expensive listing, and one at `elapsed = duration`
+   * is sitting on its floor. Somewhere in between is the only place a viewer
+   * can watch the number fall.
+   */
+  readonly elapsed: number;
+}
+
+/** What {@link listDutch} hands back. */
+export interface DutchSale {
+  readonly auctionId: bigint;
+  /** The escrowed token. */
+  readonly tokenId: bigint;
+  readonly startPrice: bigint;
+  readonly floorPrice: bigint;
+  /** The clock price at the moment this was measured, read from the contract. */
+  readonly currentPrice: bigint;
+  readonly startTime: bigint;
+  readonly endTime: bigint;
+  /** Seconds of decay that had elapsed when `currentPrice` was read. */
+  readonly elapsed: number;
 }
 
 /**
- * Opens a descending-price (Dutch) sale.
+ * Opens a descending-price (Dutch) sale and runs its clock partway down.
  *
- * THIS DEPLOYMENT HAS NO DUTCH FORMAT. `contracts/src/AuctionHouse.sol` is a
- * single ascending-price contract: there is no `Format` enum, no
- * `DutchAuction.sol` and no `currentPrice()` view, and `buyNowPrice` is fixed
- * for the life of a listing, so one auction cannot show a falling number. The
- * probe below checks for a native format anyway and says so plainly if one
- * appears, because this helper should start using it the day it lands rather
- * than quietly keep emulating.
+ * This drives the contract's OWN Dutch format. An earlier version of this
+ * helper emulated the decay with a ladder of cancelled English auctions,
+ * because {@link AuctionHouse} had no descending format; that emulation is
+ * gone now that `createDutchAuction`, `currentPrice` and `buy` exist. The two
+ * are not interchangeable and it is worth being explicit about why: a ladder
+ * shows a price that changes in visible steps, each one a separate auction id,
+ * whereas the real format is a single listing whose price is a pure function
+ * of elapsed time. Anything reading the book -- the UI, the indexer, a
+ * leaderboard -- sees one auction rather than a trail of cancellations.
  *
- * The emulation is a LADDER, and it is a faithful one: a Dutch clock is a
- * sequence of take-it-or-leave-it prices, so each rung is a real auction on the
- * same escrowed token at a lower price, and the seller cancels a rung to open
- * the next. `reservePrice` is set equal to the rung price, which is what makes
- * the Dutch semantics exact - a bid below the clock price can never win, and
- * the seller may still step the clock down past it. Every walked rung stays in
- * the book as `Cancelled`, so the decay path is visible history rather than a
- * number that changed with no trace.
+ * A Dutch sale is bought with `buy(auctionId)` at `currentPrice(auctionId)`,
+ * NOT with `bid()` or `buyNow()`. `bid()` reverts with `WrongFormat`, and
+ * `buyNowPrice` on the stored record is the START price, not the price a buyer
+ * pays now. Overpayment is accepted and the excess is credited back.
  *
  * @param ctx The scenario context.
- * @param seller The account that runs the clock.
- * @param options The ladder shape.
+ * @param seller The account that lists the token.
+ * @param options Start price, floor, duration and how far to run the clock.
+ * @returns The listing, with the clock price measured after the decay.
  */
 export async function listDutch(
   ctx: Scenario,
   seller: Actor,
   options: DutchOptions,
-): Promise<DutchLadder> {
+): Promise<DutchSale> {
   const { house, nft } = ctx;
-  const { startPrice, floorPrice, steps, stepSeconds, walk, duration } = options;
+  const { startPrice, floorPrice, duration, elapsed } = options;
 
-  require_(steps >= 2, "a Dutch ladder needs at least two rungs.");
-  require_(walk >= 1 && walk <= steps, `walk must be between 1 and ${steps}, got ${walk}.`);
   require_(floorPrice > 0n && floorPrice < startPrice, "the floor must sit below the start price.");
-
-  // The probe. `mode` is reported to the operator either way.
-  //
-  // Widened to the ABI's structural shape on purpose: the generated type knows
-  // the exact function names of TODAY'S contract, so comparing against a name
-  // it does not have is a compile error rather than the runtime question this
-  // needs to ask.
-  const abi = ctx.house.abi as readonly { type: string; name?: string }[];
-  const hasNativeFormat = abi.some(
-    (entry) => entry.type === "function" && entry.name === "currentPrice",
+  require_(
+    elapsed > 0 && BigInt(elapsed) < duration,
+    `elapsed (${elapsed}s) must be inside the decay window (0 to ${duration}s) for the` +
+      " clock to be visibly mid-fall.",
   );
-  const mode = hasNativeFormat ? "native" : "stepped";
-  if (hasNativeFormat) {
-    fail(
-      "this AuctionHouse exposes currentPrice(), so it has a native Dutch" +
-        " format and the stepped emulation below would misrepresent it." +
-        " Update listDutch() in scripts/scenarios/_shared.ts to drive the real" +
-        " format instead.",
-    );
-  }
-
-  // The full schedule, computed once so the summary can print the rungs the
-  // clock has not reached yet. Linear rather than exponential: a demo audience
-  // reads an even step far more easily than a decay curve.
-  const span = startPrice - floorPrice;
-  const schedule: bigint[] = [];
-  for (let i = 0; i < steps; i++) {
-    schedule.push(startPrice - (span * BigInt(i)) / BigInt(steps - 1));
-  }
 
   const tokenId = await nft.read.totalMinted();
   await nft.write.mintGenerative([seller.account.address], { account: seller.account });
-  // Approve for the collection, not the token: the approval is cleared every
-  // time the token moves, and it moves on every rung. One blanket approval up
-  // front is both cheaper and less fragile than re-approving inside the loop.
-  await nft.write.setApprovalForAll([house.address, true], { account: seller.account });
+  await nft.write.approve([house.address, tokenId], { account: seller.account });
 
-  // Fixed after the mint, so every rung's opening second is a pure function of
-  // this one number and `stepSeconds`. That is what makes the decay schedule
-  // identical across runs - see {pinNextBlock} for why that matters.
-  const ladderStart = await chainNow(ctx);
-  const openAt = (rung: number) => ladderStart + 1 + rung * stepSeconds;
+  const auctionId = await house.read.totalAuctions();
+  await house.write.createDutchAuction([nft.address, tokenId, startPrice, floorPrice, duration], {
+    account: seller.account,
+  });
 
-  const rungs: DutchRung[] = [];
-  let previous: bigint | undefined;
+  const owner = await nft.read.ownerOf([tokenId]);
+  require_(
+    owner.toLowerCase() === house.address.toLowerCase(),
+    `token ${tokenId} was not escrowed by the house after listing (owner is ${owner}).`,
+  );
 
-  for (let i = 0; i < walk; i++) {
-    const price = schedule[i];
+  // Run the clock down. The price is a function of block.timestamp, so moving
+  // the chain's clock IS moving the price -- there is nothing else to poke.
+  const record = await house.read.getAuction([auctionId]);
+  await fastForwardTo(ctx, Number(record.startTime) + elapsed);
 
-    if (previous !== undefined) {
-      // Step the clock down. Cancelling is allowed because the rung's reserve
-      // equals its price, so any standing bid is by definition below reserve
-      // and was always going to be refunded in full. The refund is credited by
-      // the house, not lost.
-      await house.write.cancelAuction([previous], { account: seller.account });
-    }
+  const currentPrice = await house.read.currentPrice([auctionId]);
 
-    await pinNextBlock(ctx, openAt(i));
-    const auctionId = await house.read.totalAuctions();
-    await house.write.createAuction([nft.address, tokenId, price, price, duration], {
-      account: seller.account,
-    });
-
-    rungs.push({ auctionId, price, openedAfter: openAt(i) - ladderStart });
-    previous = auctionId;
-  }
+  // The whole point of the scenario is a price strictly between the two ends.
+  // Assert it rather than trust the arithmetic: an off-by-one in the decay
+  // window would otherwise produce a scenario that runs green and shows a
+  // static number.
+  require_(
+    currentPrice < startPrice && currentPrice > floorPrice,
+    `the clock reads ${currentPrice} wei, which is not strictly between the` +
+      ` ${floorPrice} wei floor and the ${startPrice} wei start. The scenario would` +
+      " show a price that is not visibly falling.",
+  );
 
   return {
-    mode,
+    auctionId,
     tokenId,
-    rungs,
-    live: rungs[rungs.length - 1],
     startPrice,
     floorPrice,
-    remaining: schedule.slice(walk),
+    currentPrice,
+    startTime: record.startTime,
+    endTime: record.endTime,
+    elapsed,
   };
 }
 
@@ -523,7 +481,8 @@ export async function bidAt(
   options: { at: number; amount?: bigint },
 ): Promise<{ amount: bigint; at: number }> {
   const minimum = await ctx.house.read.minimumBid([auctionId]);
-  const amount = options.amount !== undefined && options.amount > minimum ? options.amount : minimum;
+  const amount =
+    options.amount !== undefined && options.amount > minimum ? options.amount : minimum;
 
   await pinNextBlock(ctx, options.at);
   await ctx.house.write.bid([auctionId], { account: bidder.account, value: amount });
@@ -574,11 +533,14 @@ export async function report(
     const auction = await ctx.house.read.getAuction([highlight.auctionId]);
     const onChain = Number(auction.endTime) - now;
     const remaining = auction.status === Status.Live ? `${Math.max(0, onChain)}s` : "closed";
-    const inBrowser = auction.status === Status.Live ? `${Math.max(0, onChain + drift)}s` : "closed";
+    const inBrowser =
+      auction.status === Status.Live ? `${Math.max(0, onChain + drift)}s` : "closed";
 
     log(`  Auction #${highlight.auctionId} - ${highlight.note}`);
     log(`    state       ${STATUS_NAMES[auction.status]}`);
-    log(`    endTime     ${auction.endTime} (${new Date(Number(auction.endTime) * 1000).toISOString()})`);
+    log(
+      `    endTime     ${auction.endTime} (${new Date(Number(auction.endTime) * 1000).toISOString()})`,
+    );
     log(`    remaining   ${remaining} on the chain clock, ${inBrowser} on the browser's`);
     log(
       `    top bid     ${
