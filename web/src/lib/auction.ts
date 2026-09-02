@@ -19,6 +19,25 @@ export const AuctionStatus = {
 
 export type AuctionStatusValue = (typeof AuctionStatus)[keyof typeof AuctionStatus];
 
+/**
+ * Mirrors `enum Format { English, Dutch }`.
+ *
+ * Which rules discover the price. It decides which entry point a listing
+ * accepts — `bid`/`buyNow` for English, `buy` for Dutch — and the contract
+ * rejects a call through the wrong one, so the UI must not offer it.
+ *
+ * The two price fields are read under different names per format: on a Dutch
+ * listing `reservePrice` is the FLOOR the price decays to and `buyNowPrice` is
+ * the OPENING price. Reading them as an English reserve and buy-now would
+ * misdescribe the sale.
+ */
+export const AuctionFormat = {
+  English: 0,
+  Dutch: 1,
+} as const;
+
+export type AuctionFormatValue = (typeof AuctionFormat)[keyof typeof AuctionFormat];
+
 /** The struct as viem decodes it. */
 export interface RawAuction {
   seller: Address;
@@ -34,6 +53,7 @@ export interface RawAuction {
   minIncrementBps: number;
   platformFeeBps: number;
   status: number;
+  format: number;
 }
 
 /** The struct plus its id and everything derived from it. */

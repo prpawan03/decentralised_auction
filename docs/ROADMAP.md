@@ -1,10 +1,13 @@
 # Roadmap
 
-Four tracks, agreed 2026-09-02. Track 1 is done; tracks 2–4 are not started.
+Four tracks, agreed 2026-09-02. Track 1 is done. Track 2 is done for English
+and Dutch, with sealed-bid still open. Tracks 3 and 4 are not started.
+
 The architectural decision that governs all contract work: **split into
-modules** — a core settlement contract plus per-format strategy modules —
-rather than growing `AuctionHouse.sol` past its current 1006 lines toward the
-24 KB deployed-bytecode limit.
+modules** — a core settlement contract plus per-format modules. The original
+reason given was the 24 KB bytecode limit; measurement showed that was never
+the binding constraint (see Track 2), and the split earns its place on
+correctness instead.
 
 ---
 
@@ -49,24 +52,49 @@ Worth considering: generate on-chain SVG `data:` URIs in the seed instead.
 
 ## Track 2 — New auction formats
 
-Dutch (declining price) and sealed-bid commit–reveal, alongside the existing
-English ascending auction. This is the headline differentiator.
+**English and Dutch done. Sealed-bid not started.**
 
-1. Extract settlement, escrow, the pull-payment ledger and the NFT-delivery
-   fallback (`_finalise`, `_releaseNft`, `_credit`, `claimNft`) into a core
-   contract. These are format-independent and already correct — do not rewrite
-   them, move them.
-2. Define the strategy interface: what a format must answer. At minimum
-   `currentPrice(auctionId)`, `acceptBid(auctionId, bidder, amount)` and
-   `winnerAt(endTime)`.
-3. English becomes the first strategy, behaviour-identical. The existing test
-   suite is the regression gate: `contracts/test/AuctionHouse.t.sol`,
-   `Regression.t.sol` and `AuctionHouseInvariant.t.sol` must pass unchanged.
-4. Dutch: price decays linearly from start to floor; the first bid wins
-   outright. No anti-snipe (there is nothing to snipe).
-5. Sealed-bid: commit hashes during bidding, reveal in a fixed window, settle
-   on the highest revealed bid. Decide up front whether it is first-price or
-   Vickrey second-price, and whether an unrevealed commit forfeits its deposit.
+The contract is now three parts:
+
+| File | Owns |
+| --- | --- |
+| `contracts/src/core/AuctionCore.sol` | Everything that does not vary by format: the auction record, per-auction escrow, the pull-payment ledger, settlement ordering, token handover and recovery, fees, pausing, the read surface. |
+| `contracts/src/formats/EnglishAuction.sol` | Ascending price: `createAuction`, `bid`, `buyNow`, `minimumBid`, anti-snipe. |
+| `contracts/src/formats/DutchAuction.sol` | Descending price: `createDutchAuction`, `buy`, `currentPrice`. |
+| `contracts/src/AuctionHouse.sol` | Composition, plus the `settle` dispatch on `Auction.format`. |
+
+126 tests passing (102 solidity, 24 nodejs). Slither unchanged against `dev`:
+High 0, Medium 0, Low 4, Informational 6, identical detector set. Deployed size
+11,897 bytes, 48.4% of the 24 KB limit.
+
+Decisions worth not re-litigating:
+
+- **Inheritance, not separately deployed strategy modules.** A format has to
+  move escrow and credit accounts. Giving that power to another contract would
+  create a boundary where a buggy module could spend a different auction's
+  money, and rule 7 would stop being enforceable by the code that states it. It
+  also keeps one auction id space, which the frontend depends on.
+- **Size was never the real constraint.** 10,428 bytes before the split, 11,897
+  with a whole second format. The split is for correctness.
+- **Dutch reuses two struct fields under different names**: `reservePrice` is
+  the floor, `buyNowPrice` is the opening price. Both readings are faithful, it
+  keeps one struct for every format, and the record still packs into five slots.
+- **`settle` dispatches on the stored format explicitly**, not through `super`
+  and C3 linearisation, so reordering the parent list cannot change who gets
+  paid.
+
+### Still open on this track
+
+- **Sealed-bid commit–reveal.** Decide first-price vs Vickrey second-price, and
+  whether an unrevealed commit forfeits its deposit.
+- **The invariant handler only drives English.** `contracts/test/mocks/AuctionHandler.sol`
+  never calls `createDutchAuction` or `buy`, so the invariant runs prove nothing
+  about the descending format. Extending it is the highest-value next test job.
+- **No frontend for Dutch yet.** `AuctionFormat` exists in `web/src/lib/auction.ts`
+  and the ABI is regenerated, but nothing renders a falling price, offers a Buy
+  button, or lists a Dutch auction. Until that lands, a Dutch listing shows in
+  the grid with its floor read as a reserve and its opening price read as a
+  buy-now, which misdescribes the sale.
 
 ## Track 3 — Marketplace completeness
 
@@ -78,10 +106,11 @@ English ascending auction. This is the headline differentiator.
   value) are the trap; use SafeERC20 and measure balances, do not trust
   arguments.
 - **ERC-1155 and bundle lots.** More than one item behind a single auction.
-- **Per-auction minimum increment.** The struct field already exists at
-  `contracts/src/AuctionHouse.sol:96` but `createAuction` hardcodes
-  `DEFAULT_INCREMENT_BPS` at line 438. Sellers cannot set their own bid step.
-  This is the cheapest item on this list.
+- **Per-auction minimum increment.** The struct field exists in
+  `contracts/src/core/AuctionCore.sol`, but `EnglishAuction.createAuction`
+  passes `DEFAULT_INCREMENT_BPS` into `_openAuction` unconditionally, so
+  sellers cannot set their own bid step. The cheapest item on this list, and
+  `_openAuction` already takes the parameter.
 - **Scheduled start times.** `startTime` is always `block.timestamp`, so you
   cannot list now and open bidding on Friday.
 - **Proxy / automatic bidding.** Commit a maximum; the contract bids up by the
