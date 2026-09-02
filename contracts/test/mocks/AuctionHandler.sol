@@ -5,6 +5,7 @@ import {CommonBase} from "forge-std/Base.sol";
 import {StdUtils} from "forge-std/StdUtils.sol";
 
 import {AuctionHouse} from "../../src/AuctionHouse.sol";
+import {AuctionCore} from "../../src/core/AuctionCore.sol";
 import {DemoNFT} from "../../src/DemoNFT.sol";
 
 /**
@@ -100,8 +101,8 @@ contract AuctionHandler is CommonBase, StdUtils {
         if (total == 0) return;
 
         uint256 id = auctionSeed % total;
-        AuctionHouse.Auction memory auction = HOUSE.getAuction(id);
-        if (auction.status != AuctionHouse.Status.Live) return;
+        AuctionCore.Auction memory auction = HOUSE.getAuction(id);
+        if (auction.status != AuctionCore.Status.Live) return;
         if (block.timestamp >= auction.endTime) return;
 
         address actor = _actor(actorSeed);
@@ -126,8 +127,8 @@ contract AuctionHandler is CommonBase, StdUtils {
         if (total == 0) return;
 
         uint256 id = auctionSeed % total;
-        AuctionHouse.Auction memory auction = HOUSE.getAuction(id);
-        if (auction.status != AuctionHouse.Status.Live) return;
+        AuctionCore.Auction memory auction = HOUSE.getAuction(id);
+        if (auction.status != AuctionCore.Status.Live) return;
         if (block.timestamp >= auction.endTime) return;
         if (auction.buyNowPrice == 0 || auction.highestBid >= auction.buyNowPrice) return;
 
@@ -165,8 +166,8 @@ contract AuctionHandler is CommonBase, StdUtils {
         if (total == 0) return;
 
         uint256 id = auctionSeed % total;
-        AuctionHouse.Auction memory auction = HOUSE.getAuction(id);
-        if (auction.status != AuctionHouse.Status.Live) return;
+        AuctionCore.Auction memory auction = HOUSE.getAuction(id);
+        if (auction.status != AuctionCore.Status.Live) return;
         // The same rule the contract applies: no bids at all, or a standing bid
         // that is below the reserve and so was never going to win anyway. This
         // path moves escrow into a refund, so the fuzzer must reach it.
