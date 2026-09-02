@@ -90,11 +90,42 @@ Decisions worth not re-litigating:
 - **The invariant handler only drives English.** `contracts/test/mocks/AuctionHandler.sol`
   never calls `createDutchAuction` or `buy`, so the invariant runs prove nothing
   about the descending format. Extending it is the highest-value next test job.
-- **No frontend for Dutch yet.** `AuctionFormat` exists in `web/src/lib/auction.ts`
-  and the ABI is regenerated, but nothing renders a falling price, offers a Buy
-  button, or lists a Dutch auction. Until that lands, a Dutch listing shows in
-  the grid with its floor read as a reserve and its opening price read as a
-  buy-now, which misdescribes the sale.
+- ~~No frontend for Dutch yet.~~ **Done** — see below.
+
+### Dutch frontend ✅ done
+
+| Delivered | Where |
+| --- | --- |
+| `dutchPriceAt`, a bigint mirror of `_currentPrice` including its flooring | `web/src/lib/auction.ts` |
+| Live falling price and the format badge | `web/src/features/auctions/DutchPrice.tsx` |
+| Buy at the current price, with clock-skew handling | `web/src/features/bidding/BuyDutchButton.tsx` |
+| Format-aware grid, detail stats, anti-snipe suppression | `AuctionTable.tsx`, `AuctionDetailPage.tsx`, `AntiSnipeBadge.tsx` |
+| Format chooser and Dutch price fields when listing | `listingSchema.ts`, `CreateListingPage.tsx` |
+
+156 web tests pass, plus the contrast gate and the production build.
+
+Decisions worth not re-litigating:
+
+- **`buyNowEnabled` and `reserveMet` branch on format rather than reading the
+  fields blind.** On a Dutch listing `buyNowPrice` is the OPENING price, so
+  rendering it as a buy-now advertised a number far above what the item could
+  actually be bought for. Callers must check `isDutch` first.
+- **The buy sends the price as of 15 seconds ago, not the quote.** The browser
+  clock and the block timestamp are different clocks; if the chain lags, the
+  exact quote reverts with `BidTooLow`. The margin is small because `buy`
+  credits the excess to `pendingReturns` rather than refunding it in the
+  transaction, so overpaying costs the buyer a second transaction. The
+  simulation is the real gate.
+- **The falling price carries no `aria-live`.** It changes every second, and
+  announcing it would make the page unusable with a screen reader (SC 2.2.2).
+
+### Contract wart found while wiring the frontend
+
+`EnglishAuction.minimumBid` has no `_requireFormat` guard, so calling it on a
+Dutch auction returns the English increment formula applied to the Dutch sale
+price — a meaningless number rather than a revert. The UI works around it by
+not showing that stat for Dutch, but the guard belongs in the contract,
+alongside the ones already on `bid`, `buyNow` and `currentPrice`.
 
 ## Track 3 — Marketplace completeness
 
