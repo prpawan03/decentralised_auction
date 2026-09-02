@@ -1,0 +1,32 @@
+{
+  // Standalone. This config deliberately does NOT extend the repo-root tsconfig:
+  // the package must type-check and build on its own, without the workspace
+  // being installed, so that `npm install && npx tsc` inside mcp/ is sufficient.
+  "compilerOptions": {
+    // NodeNext is required, not stylistic: the MCP SDK v2 ships ESM-first with
+    // conditional exports (`.` and `./stdio` resolve to different files), and
+    // only the NodeNext resolver reads the `exports` map correctly.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+
+    "outDir": "./dist",
+    "rootDir": "./src",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": false,
+
+    "declaration": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
