@@ -1,0 +1,19 @@
+{
+  "//": "Ponder's own recommended settings. `strict` and `noUncheckedIndexedAccess` are what make the virtual `ponder:schema` types catch a column rename, so weakening them would remove the main reason this project is TypeScript at all.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}
