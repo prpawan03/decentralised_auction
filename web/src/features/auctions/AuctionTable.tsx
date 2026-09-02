@@ -7,13 +7,16 @@ import { AddressChip } from "@/components/ui/AddressChip";
 import { StateStripe, type Tone } from "@/components/ui/Pill";
 import { StatusPill, StandingPill } from "./StatusPill";
 import { AntiSnipeBadge } from "./AntiSnipeBadge";
+import { DutchPrice, FormatPill } from "./DutchPrice";
 import { WatchButton } from "./WatchButton";
 import { NftMedia } from "@/components/ui/NftMedia";
 import { nftKey, type NftView } from "@/hooks/useNftMetadata";
 import { fallbackName } from "@/lib/nftMetadata";
 import {
   buyNowEnabled,
+  dutchFloorPrice,
   hasBid,
+  isDutch,
   phaseOf,
   reserveMet,
   sameAddress,
@@ -129,6 +132,12 @@ export function AuctionTable({
             const bid = hasBid(a);
             const met = reserveMet(a);
             const art = metadata?.get(nftKey(a.nft, a.tokenId));
+            const dutch = isDutch(a);
+            const closedRow =
+              phase === "settled" ||
+              phase === "cancelled" ||
+              phase === "reserve-not-met" ||
+              phase === "delivery-failed";
             return (
               <tr
                 key={a.id.toString()}
@@ -186,13 +195,37 @@ export function AuctionTable({
                 <td className="px-4 py-3 align-middle">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <StatusPill auction={a} now={now} />
+                    <FormatPill auction={a} />
                     <StandingPill auction={a} account={account} now={now} />
                     <AntiSnipeBadge auction={a} compact />
                   </div>
                 </td>
 
                 <td className="px-4 py-3 text-right align-middle">
-                  {bid ? (
+                  {/* A Dutch listing never has a "top bid": nobody bids, the
+                      price falls until someone accepts it. Live, this column
+                      is the asking price right now; once bought, it is what
+                      the buyer actually paid. */}
+                  {dutch ? (
+                    closedRow ? (
+                      bid ? (
+                        <span title="The price this listing sold at">
+                          <Money wei={a.highestBid} bare size="sm" />
+                        </span>
+                      ) : (
+                        <span
+                          className="text-[0.8125rem] text-[var(--color-ink-3)]"
+                          title="Nobody bought it at any price down to the floor"
+                        >
+                          unsold
+                        </span>
+                      )
+                    ) : (
+                      <span title="The asking price right now. It falls every second.">
+                        <DutchPrice auction={a} />
+                      </span>
+                    )
+                  ) : bid ? (
                     <Money wei={a.highestBid} bare tone={met ? "default" : "muted"} size="sm" />
                   ) : (
                     <span className="text-[0.8125rem] text-[var(--color-ink-3)]">no bids</span>
@@ -200,7 +233,14 @@ export function AuctionTable({
                 </td>
 
                 <td className="px-4 py-3 text-right align-middle">
-                  {a.reservePrice > 0n ? (
+                  {dutch ? (
+                    <span
+                      className="text-[0.8125rem] text-[var(--color-ink-2)]"
+                      title="The floor: the lowest this price will ever reach. Not a reserve to beat."
+                    >
+                      <Money wei={dutchFloorPrice(a)} bare tone="muted" size="sm" />
+                    </span>
+                  ) : a.reservePrice > 0n ? (
                     <span className="inline-flex items-center gap-1.5">
                       <Money wei={a.reservePrice} bare tone="muted" size="sm" />
                       {bid && !met ? (
@@ -218,7 +258,17 @@ export function AuctionTable({
                 </td>
 
                 <td className="px-4 py-3 text-right align-middle">
-                  {buyNowEnabled(a) ? (
+                  {dutch ? (
+                    /* buyNowPrice holds the OPENING price on a Dutch listing.
+                       Rendering it here would advertise a number far above what
+                       the item can be bought for right now. */
+                    <span
+                      className="text-[0.8125rem] text-[var(--color-ink-3)]"
+                      title="Dutch listings have no separate buy-now price. The falling price IS the price."
+                    >
+                      n/a
+                    </span>
+                  ) : buyNowEnabled(a) ? (
                     <Money wei={a.buyNowPrice} bare tone="muted" size="sm" />
                   ) : (
                     /* buyNowPrice == 0 means DISABLED, never "free". */
@@ -233,7 +283,7 @@ export function AuctionTable({
                     <AddressChip
                       address={a.highestBidder}
                       you={sameAddress(a.highestBidder, account)}
-                      label="highest bidder"
+                      label={dutch ? "buyer" : "highest bidder"}
                       className="text-[0.8125rem]"
                     />
                   )}

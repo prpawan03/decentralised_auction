@@ -44,8 +44,31 @@ export const DURATION_PRESETS = [
   { label: "7 days", seconds: 604_800 },
 ] as const;
 
+/**
+ * Which format the seller is creating.
+ *
+ * The two share a shape but not a vocabulary. English asks for a reserve and
+ * an optional buy-now; Dutch asks for an opening price and a floor it decays
+ * to. They are separate fields rather than one pair read two ways, because a
+ * form that silently changes what a number means is how a seller lists an item
+ * at the wrong price.
+ */
+export const LISTING_FORMATS = [
+  {
+    id: "english" as const,
+    label: "English (ascending)",
+    describe: "Bidders compete upward against a deadline. Anti-snipe extends the close.",
+  },
+  {
+    id: "dutch" as const,
+    label: "Dutch (descending)",
+    describe: "The price starts high and falls. The first buyer to accept it wins.",
+  },
+];
+
 export const listingSchema = z
   .object({
+    format: z.enum(["english", "dutch"]).default("english"),
     nft: z
       .string()
       .trim()
@@ -58,6 +81,10 @@ export const listingSchema = z
       .refine((v) => /^\d+$/.test(v), { message: "Token id must be a whole number." }),
     reservePrice: ethAmount("Reserve price"),
     buyNowPrice: ethAmount("Buy-now price"),
+    /* Dutch only. Defaulted so an English submission never has to carry them
+       and the existing English rules stay exactly as they were. */
+    startPrice: ethAmount("Opening price").default("0"),
+    floorPrice: ethAmount("Floor price").default("0"),
     durationSeconds: z
       .number({ message: "Choose how long the auction runs." })
       .int("Duration must be a whole number of seconds.")
@@ -75,6 +102,7 @@ export const listingSchema = z
      so is the message. */
   .refine(
     (data) => {
+      if (data.format !== "english") return true;
       try {
         const buyNow = parseEther(data.buyNowPrice as `${number}`);
         const reserve = parseEther(data.reservePrice as `${number}`);
@@ -87,6 +115,42 @@ export const listingSchema = z
       message:
         "Buy-now must be higher than the reserve, or exactly 0 to switch buy-now off. A buy-now at or below the reserve would let someone skip the auction for less than you said you would accept.",
       path: ["buyNowPrice"],
+    },
+  )
+  /* Mirrors DutchAuction.createDutchAuction:
+       startPrice == 0 || startPrice < floorPrice -> InvalidDutchPrices
+     Equal prices are LEGAL — that is a flat listing at a fixed price, and the
+     contract allows it, so the form must not be stricter than the chain. */
+  .refine(
+    (data) => {
+      if (data.format !== "dutch") return true;
+      try {
+        return parseEther(data.startPrice as `${number}`) > 0n;
+      } catch {
+        return false;
+      }
+    },
+    {
+      message:
+        "The opening price must be above zero. A Dutch listing that opens at 0 is on sale for nothing from its first second.",
+      path: ["startPrice"],
+    },
+  )
+  .refine(
+    (data) => {
+      if (data.format !== "dutch") return true;
+      try {
+        const start = parseEther(data.startPrice as `${number}`);
+        const floor = parseEther(data.floorPrice as `${number}`);
+        return start >= floor;
+      } catch {
+        return false;
+      }
+    },
+    {
+      message:
+        "The floor cannot be above the opening price — that would make the price rise instead of fall. Set them equal for a flat price.",
+      path: ["floorPrice"],
     },
   );
 
@@ -102,4 +166,29 @@ export function toCreateArgs(values: ListingValues) {
     parseEther(values.buyNowPrice as `${number}`),
     BigInt(values.durationSeconds),
   ] as const;
+}
+
+/** The argument tuple `createDutchAuction` takes: start THEN floor. */
+export function toDutchCreateArgs(values: ListingValues) {
+  return [
+    values.nft as `0x${string}`,
+    BigInt(values.tokenId),
+    parseEther(values.startPrice as `${number}`),
+    parseEther(values.floorPrice as `${number}`),
+    BigInt(values.durationSeconds),
+  ] as const;
+}
+
+/**
+ * The contract call for whichever format was chosen.
+ *
+ * The two entry points take their prices in OPPOSITE orders — `createAuction`
+ * is (reserve, buyNow) ascending, `createDutchAuction` is (start, floor)
+ * descending — so the mapping lives here, once, next to the schema that
+ * validated them, rather than being reassembled at the call site.
+ */
+export function toCreateCall(values: ListingValues) {
+  return values.format === "dutch"
+    ? ({ functionName: "createDutchAuction", args: toDutchCreateArgs(values) } as const)
+    : ({ functionName: "createAuction", args: toCreateArgs(values) } as const);
 }
