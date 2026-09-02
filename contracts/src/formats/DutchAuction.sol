@@ -125,7 +125,7 @@ abstract contract DutchAuction is AuctionCore {
 
         // There is no previous bidder to report: a descending auction that is
         // still Live has never had one.
-        emit BidPlaced(auctionId, msg.sender, uint96(price), address(0), 0, auction.endTime);
+        emit BidPlaced(auctionId, msg.sender, uint96(price), address(0), 0, auction.endTime, false);
 
         _finalise(auctionId, auction, Status.Settled);
     }

@@ -404,6 +404,12 @@ export const auctionHouseAbi = [
         "internalType": "uint64",
         "name": "endTime",
         "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum AuctionCore.Format",
+        "name": "format",
+        "type": "uint8"
       }
     ],
     "name": "AuctionCreated",
@@ -515,6 +521,12 @@ export const auctionHouseAbi = [
         "internalType": "uint64",
         "name": "endTime",
         "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "extended",
+        "type": "bool"
       }
     ],
     "name": "BidPlaced",
