@@ -21,7 +21,7 @@ NPM          ?= npm
 .SHELLFLAGS := -eu -c
 .DEFAULT_GOAL := help
 
-.PHONY: help setup up watch down clean logs deploy seed test lint fmt prod smoke reset-chain audit check-actions
+.PHONY: help setup up watch down clean logs deploy seed test lint fmt prod smoke reset-chain audit check-actions indexer monitoring full scenario
 
 ## ---------------------------------------------------------------------------
 ## Help
@@ -61,6 +61,36 @@ up: ## Build and start the whole stack in the background
 
 watch: ## Start the stack and copy source changes into the containers
 	$(COMPOSE) up --build --watch
+
+# The optional profiles. Each overlay adds services and leaves the base stack
+# alone, so `make up` stays a three-container start.
+#
+# The file list is explicit, which also DISABLES the automatic load of
+# compose.override.yaml -- so it is named here on purpose. Dropping it would
+# silently start the production web target instead of the Vite dev server.
+COMPOSE_INDEXER    := $(COMPOSE) -f compose.yaml -f compose.override.yaml -f compose.indexer.yaml
+COMPOSE_MONITORING := $(COMPOSE) -f compose.yaml -f compose.override.yaml -f compose.monitoring.yaml
+COMPOSE_FULL       := $(COMPOSE) -f compose.yaml -f compose.override.yaml -f compose.indexer.yaml -f compose.monitoring.yaml
+
+indexer: ## Start the stack with the Ponder indexer (GraphQL at /graphql)
+	$(COMPOSE_INDEXER) --profile indexer up -d --build
+	@printf '\nIndexer is starting.\n'
+	@printf '  GraphQL:  http://127.0.0.1:${WEB_PORT:-5173}/graphql\n'
+	@printf '  REST:     http://127.0.0.1:${WEB_PORT:-5173}/api/leaderboard/bidders\n'
+	@printf 'It is proxied through nginx, so there is no extra port to open.\n'
+
+monitoring: ## Start the stack with Prometheus and Grafana
+	$(COMPOSE_MONITORING) --profile monitoring up -d --build
+	@printf '\nMonitoring is starting.\n'
+	@printf '  Grafana:    http://127.0.0.1:${GRAFANA_PORT:-3000}  (no login)\n'
+	@printf '  Prometheus: http://127.0.0.1:${PROMETHEUS_PORT:-9090}\n'
+
+full: ## Start everything: chain, web, indexer and monitoring
+	$(COMPOSE_FULL) --profile indexer --profile monitoring up -d --build
+
+scenario: ## Load a demo scenario. SCENARIO=ending-soon|snipe-in-progress|reserve-not-met|dutch-falling
+	@test -n "$(SCENARIO)" || { printf 'scenario: set SCENARIO=<name>, e.g. "make scenario SCENARIO=snipe-in-progress".\n' >&2; exit 1; }
+	$(COMPOSE) run --rm --no-deps --entrypoint sh deployer -c 'npx hardhat run scripts/scenarios/$(SCENARIO).ts --network localhost'
 
 prod: ## Build and start the production shape: nginx serves a static bundle
 	$(COMPOSE_PROD) up -d --build

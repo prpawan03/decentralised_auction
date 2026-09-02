@@ -45,7 +45,12 @@
 
     "//checks": "--- Configuration checks ---",
     "compose:config": "docker compose config --quiet && docker compose -f compose.yaml -f compose.prod.yaml config --quiet && echo \"compose: both file sets parse\"",
-    "check:actions": "node scripts/check-action-pins.mjs"
+    "check:actions": "node scripts/check-action-pins.mjs",
+
+    "//profiles": "--- Optional Compose profiles ---",
+    "indexer": "docker compose -f compose.yaml -f compose.override.yaml -f compose.indexer.yaml --profile indexer up -d --build",
+    "monitoring": "docker compose -f compose.yaml -f compose.override.yaml -f compose.monitoring.yaml --profile monitoring up -d --build",
+    "full": "docker compose -f compose.yaml -f compose.override.yaml -f compose.indexer.yaml -f compose.monitoring.yaml --profile indexer --profile monitoring up -d --build"
   },
   "devDependencies": {
     "prettier": "^3.6.2"
