@@ -116,6 +116,7 @@ abstract contract EnglishAuction is AuctionCore {
         auction.highestBid = uint96(msg.value);
 
         uint64 endTime = auction.endTime;
+        bool extended = false;
         // Anti-snipe. The extension count is capped so the auction always ends.
         //
         // The candidate is computed FIRST and the clock only moves when the
@@ -132,10 +133,19 @@ abstract contract EnglishAuction is AuctionCore {
             unchecked {
                 auction.extensionCount += 1;
             }
+            extended = true;
             emit AuctionExtended(auctionId, endTime, auction.extensionCount);
         }
 
-        emit BidPlaced(auctionId, msg.sender, uint96(msg.value), previousBidder, previousAmount, endTime);
+        emit BidPlaced(
+            auctionId,
+            msg.sender,
+            uint96(msg.value),
+            previousBidder,
+            previousAmount,
+            endTime,
+            extended
+        );
         // --- No interaction. This function makes no external call at all. ---
     }
 
@@ -178,7 +188,7 @@ abstract contract EnglishAuction is AuctionCore {
         auction.highestBid = price;
         auction.endTime = uint64(block.timestamp);
 
-        emit BidPlaced(auctionId, msg.sender, price, previousBidder, previousAmount, auction.endTime);
+        emit BidPlaced(auctionId, msg.sender, price, previousBidder, previousAmount, auction.endTime, false);
 
         // The buy-now price is never below the reserve, so the outcome is Settled.
         _finalise(auctionId, auction, Status.Settled);

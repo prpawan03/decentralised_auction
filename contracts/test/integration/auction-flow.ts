@@ -46,6 +46,11 @@ describe("AuctionHouse — list, outbid, settle, withdraw", () => {
         getAddress(alice.account.address),
         parseEther("1"),
         (endTime: bigint) => endTime > 0n,
+        // This bid lands far from the close, so it must NOT have moved the
+        // clock. Asserting false here is what makes the true case in
+        // anti-snipe.ts meaningful: without it, a flag stuck on one value
+        // would pass both suites.
+        false,
       ],
     );
 
