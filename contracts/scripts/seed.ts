@@ -24,7 +24,13 @@ const DEPLOYMENTS_DIR = path.resolve(HERE, "..", "deployments");
 interface Item {
   readonly name: string;
   readonly description: string;
-  /** A real, reachable image URL. Verified against Wikimedia Commons. */
+  /**
+   * A real, reachable image URL. Verified against Wikimedia Commons.
+   *
+   * Used ONLY when SEED_HOSTED_IMAGES=true. The default seed draws its own
+   * cover instead, because a remote image is blocked by the production
+   * Content-Security-Policy. See {coverImage}.
+   */
   readonly image: string;
 }
 
@@ -117,12 +123,91 @@ const [, ann, ben, cara, dev, eli] = wallets;
 
 type Wallet = (typeof wallets)[number];
 
+/**
+ * Whether to embed the catalogue's remote photographs.
+ *
+ * DEFAULT IS `false`, AND THAT IS A BUG FIX.
+ * The production shape serves `img-src 'self' data: blob:`
+ * (docker/nginx/default.conf), so a token whose image is an
+ * `https://upload.wikimedia.org/...` URL renders a PLACEHOLDER behind nginx.
+ * Under the Vite development server, which sets no policy, the very same seed
+ * looks perfect. The demonstration therefore worked in development and was
+ * quietly broken in the shape anyone would actually be shown.
+ *
+ * Set SEED_HOSTED_IMAGES=true to get the old behaviour back. It is worth doing
+ * once, side by side with the default, because seeing the placeholders appear
+ * only in the production build is a better explanation of why content
+ * addressing matters than any paragraph about it.
+ */
+const HOSTED_IMAGES = process.env.SEED_HOSTED_IMAGES === "true";
+
+/**
+ * A self-contained cover image for one catalogue item.
+ *
+ * Drawn here rather than fetched, so the listing renders under the production
+ * Content-Security-Policy, with no network and no IPFS gateway. The hue is
+ * derived from the name, so an item always gets the same colour.
+ *
+ * This is NOT the same thing as {DemoNFT.mintGenerative}, which builds its art
+ * inside the contract. This one is composed off chain and stored as the
+ * token's URI, which is the ordinary way a collection works. The two exist
+ * together on purpose: one shows the normal path made safe, the other shows
+ * the fully on-chain path.
+ */
+function coverImage(item: Item): string {
+  let hash = 0;
+  for (const character of item.name) {
+    hash = (hash * 31 + character.charCodeAt(0)) % 360;
+  }
+
+  // Break the name into lines short enough to fit the plate.
+  const lines: string[] = [];
+  let line = "";
+  for (const word of item.name.split(" ")) {
+    if ((line + " " + word).trim().length > 18) {
+      lines.push(line.trim());
+      line = word;
+    } else {
+      line = `${line} ${word}`;
+    }
+  }
+  lines.push(line.trim());
+
+  const text = lines
+    .slice(0, 4)
+    .map(
+      (value, index) =>
+        `<text x='56' y='${250 + index * 46}' font-family='Georgia,serif' font-size='38' fill='#f4f1ea'>${escapeXml(value)}</text>`,
+    )
+    .join("");
+
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'>` +
+    `<rect width='512' height='512' fill='hsl(${hash},32%,14%)'/>` +
+    `<rect x='28' y='28' width='456' height='456' fill='none' stroke='hsl(${hash},48%,58%)' stroke-width='2'/>` +
+    `<text x='56' y='104' font-family='monospace' font-size='18' letter-spacing='4' fill='hsl(${hash},40%,64%)'>AUCTION HOUSE</text>` +
+    text +
+    `</svg>`;
+
+  return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+}
+
+/** Escapes the five characters that may not appear literally in XML text. */
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 /** Wraps an item as an ERC-721 metadata document in a `data:` URI. */
 function metadataUri(item: Item): string {
   const json = JSON.stringify({
     name: item.name,
     description: item.description,
-    image: item.image,
+    image: HOSTED_IMAGES ? item.image : coverImage(item),
   });
   return `data:application/json;base64,${Buffer.from(json, "utf8").toString("base64")}`;
 }
