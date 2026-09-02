@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# Grafana datasource provisioning.
+#
+# Mounted read-only at /etc/grafana/provisioning/datasources/. Grafana reads
+# this once at start-up. A change here needs a container restart -- unlike the
+# dashboard provider, datasources are not re-read on a timer.
+#
+# The `uid` fields are FIXED and load-bearing: ops/grafana/dashboards/*.json
+# reference datasources by uid. Let Grafana generate a random uid instead and
+# every provisioned panel renders "Datasource not found".
+# ---------------------------------------------------------------------------
+
+apiVersion: 1
+
+datasources:
+  # -------------------------------------------------------------------------
+  # Prometheus: the metrics store. This is what the dashboard queries.
+  # -------------------------------------------------------------------------
+  - name: Prometheus
+    uid: auction-prometheus
+    type: prometheus
+    access: proxy
+    # Service name on the `auction` network, not 127.0.0.1: Grafana queries
+    # this from inside its own container, where localhost is Grafana itself.
+    url: http://prometheus:9090
+    isDefault: true
+    # `editable: false` is deliberate. Anonymous access is on with the Admin
+    # role (this is a local demo), so anyone with the tab open could otherwise
+    # repoint or delete the datasource, and the change would survive until the
+    # next container restart silently reverted it. Read-only makes the file the
+    # single source of truth.
+    editable: false
+    jsonData:
+      httpMethod: POST
+      # Must match `scrape_interval` in ops/prometheus/prometheus.yml. Grafana
+      # uses it as the floor for $__rate_interval; a wrong value here makes
+      # rate() queries return gaps that look like data loss.
+      timeInterval: 5s
+
+  # -------------------------------------------------------------------------
+  # Postgres: the Ponder indexer's database, for panels that need indexed
+  # history rather than point-in-time chain state.
+  #
+  # THIS ONLY RESOLVES WHEN THE INDEXER PROFILE IS RUNNING. `indexer-db` is a
+  # service in that profile, so with the profile off the hostname does not
+  # exist and Grafana's "Save & test" reports a DNS failure. That is expected,
+  # not a misconfiguration -- the monitoring stack is designed to come up
+  # without the indexer. Nothing in auction-overview.json queries this
+  # datasource, so its absence leaves the default dashboard fully working.
+  # -------------------------------------------------------------------------
+  - name: Indexer Postgres
+    uid: auction-indexer-postgres
+    type: postgres
+    access: proxy
+    url: indexer-db:5432
+    database: ponder
+    user: postgres
+    editable: false
+    secureJsonData:
+      # A hard-coded password is acceptable ONLY because this database is a
+      # local, disposable, demo-data indexer that is never published off
+      # 127.0.0.1. Do not copy this pattern to anything real -- use
+      # $__file{} or an env var reference there.
+      password: ponder
+    jsonData:
+      # `disable` matches the local Postgres image, which is not configured
+      # with TLS. Leaving the default (`require`) would fail every query.
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false

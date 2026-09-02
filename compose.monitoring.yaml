@@ -1,0 +1,255 @@
+# ---------------------------------------------------------------------------
+# Monitoring overlay: chain exporter, Prometheus, Grafana.
+#
+# This is an OVERLAY. It has no top-level `name` and it does not redeclare the
+# `auction` network -- both come from compose.yaml, which MUST be passed first:
+#
+#   docker compose -f compose.yaml -f compose.monitoring.yaml \
+#     --profile monitoring up -d
+#
+# Every service sits behind `profiles: [monitoring]`, so adding this file to
+# the `-f` list costs nothing until the profile is switched on. That is what
+# lets `make up` stay fast while the monitoring stack is still one flag away.
+#
+# WHY A CUSTOM EXPORTER instead of an off-the-shelf one: JSON-RPC returns hex
+# quantities, and json_exporter's SanitizeValue ends in strconv.ParseFloat,
+# which rejects "0x1f4". blackbox_exporter gives probe_success and nothing
+# numeric. ethereum-metrics-exporter is stale (v0.29.2, 2024), defaults to port
+# 9090 where it would collide with Prometheus below, and needs net_peerCount,
+# admin_* and txpool_*, none of which Hardhat implements. The long version is
+# in docker/exporter/src/collector.mjs and ops/README.md.
+#
+# SECURITY: every published port binds 127.0.0.1. The chain these services
+# watch has funded accounts with publicly known private keys, and Grafana here
+# runs with anonymous Admin access and no login form. Neither belongs on a
+# network interface. Do not remove a 127.0.0.1 prefix.
+# ---------------------------------------------------------------------------
+
+# --- Shared fragments ------------------------------------------------------
+#
+# Redefined rather than reused: YAML anchors do NOT cross file boundaries in
+# Compose. Each file resolves its own aliases before the merge, so an anchor
+# declared in compose.yaml is invisible here. These MUST be kept in step with
+# the originals in compose.yaml.
+
+# Log rotation. Without a limit, a 5-second scrape loop fills the disk during
+# a long demonstration just as surely as the chain log does.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-service-defaults: &service-defaults
+  # `init: true` runs a small process 1 that reaps zombies and forwards
+  # signals. Without it Ctrl-C can leave a container running.
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging: *logging
+  restart: unless-stopped
+  networks:
+    - auction
+  profiles:
+    - monitoring
+
+services:
+  # -------------------------------------------------------------------------
+  # chain-exporter: JSON-RPC and AuctionHouse state as Prometheus metrics.
+  # -------------------------------------------------------------------------
+  chain-exporter:
+    <<: *service-defaults
+    build:
+      # The repository root, matching every other image here. The Dockerfile
+      # copies only docker/exporter/, and .dockerignore already adds `docker`
+      # back after the wide exclusions, so the context stays small.
+      context: .
+      dockerfile: docker/exporter.Dockerfile
+      target: runtime
+      args:
+        NODE_VERSION: 24-alpine
+    image: auction/chain-exporter:local
+    container_name: auction-chain-exporter
+    depends_on:
+      # Waiting for `service_healthy` rather than `service_started` means the
+      # first poll lands on a node that is actually answering, so the dashboard
+      # opens with real data instead of a rpc_up=0 blip that an audience reads
+      # as a broken stack.
+      chain:
+        condition: service_healthy
+    environment:
+      # The in-network address. Unlike the web service, this is NOT a host
+      # address -- nothing here runs in a browser.
+      RPC_URL: http://chain:8545
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      EXPORTER_PORT: "9101"
+      # Matches Prometheus's scrape_interval so a bid is never more than two
+      # intervals away from being drawn.
+      POLL_INTERVAL_MS: "5000"
+      # Usually EMPTY, and that is fine. The addresses are not known until the
+      # deployer has run, so the exporter falls back to the deployments file
+      # mounted below. Setting either here overrides that fallback.
+      AUCTION_HOUSE_ADDRESS: ${AUCTION_HOUSE_ADDRESS:-}
+      DEMO_NFT_ADDRESS: ${DEMO_NFT_ADDRESS:-}
+      DEPLOYMENTS_FILE: /deployments/31337.json
+    volumes:
+      # This mount is what makes the stack zero-click. The deployer writes the
+      # fresh contract addresses here on every `make up`, and the exporter
+      # re-reads the file whenever its mtime changes -- so a teardown and
+      # redeploy is picked up without anyone editing an .env or restarting
+      # this container. Read-only: the exporter has no business writing it.
+      - ./contracts/deployments:/deployments:ro
+    expose:
+      # Reachable by Prometheus over the `auction` network and by nothing else.
+      # Deliberately NOT published: there is no reason for a human to read raw
+      # exposition text, and 9101 on the host is one more thing to collide.
+      - "9101"
+    # Verified: this service writes nothing to disk. Node still wants a
+    # writable /tmp for its own scratch use.
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    stop_grace_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+        reservations:
+          memory: 32m
+
+  # -------------------------------------------------------------------------
+  # prometheus: metric storage and the scrape loop.
+  # -------------------------------------------------------------------------
+  prometheus:
+    <<: *service-defaults
+    # Pinned, not `:latest`. A silently-upgraded Prometheus that drops a flag
+    # this file passes turns a working demo into a crash loop.
+    image: prom/prometheus:v3.1.0
+    container_name: auction-prometheus
+    depends_on:
+      # `service_started` only. Prometheus retries a failing target for ever,
+      # so it does not need the exporter healthy first -- and gating on health
+      # would make Prometheus unavailable exactly when the exporter is sick,
+      # which is when its history is most wanted.
+      chain-exporter:
+        condition: service_started
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Short retention because the TSDB lives on a tmpfs (see below) and this
+      # is a demo, not a system of record.
+      - --storage.tsdb.retention.time=6h
+      - --storage.tsdb.retention.size=384MB
+      - --web.listen-address=0.0.0.0:9090
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus:/etc/prometheus:ro
+    ports:
+      # SECURITY: 127.0.0.1 is deliberate. Prometheus has no authentication and
+      # --web.enable-lifecycle above exposes a shutdown endpoint.
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      # The image ships wget (busybox). /-/healthy is Prometheus's own probe
+      # endpoint and does not require the scrape targets to be up.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      # A tmpfs TSDB rather than a named volume, and that is a choice, not an
+      # oversight. The overlay stays services-only (no top-level `volumes:`),
+      # and more importantly a persisted TSDB would outlive the chain: after
+      # `make down && make up` the chain restarts at block 0 while Prometheus
+      # still holds a series that ran to block 4000, and the block-height panel
+      # draws a cliff from a chain that no longer exists. Ephemeral storage
+      # keeps the history honest. Add a named volume if you ever need it to
+      # survive, and accept the discontinuity.
+      - /prometheus:mode=1777,size=512m
+      - /tmp:mode=1777,size=16m
+    stop_grace_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768m
+        reservations:
+          memory: 128m
+
+  # -------------------------------------------------------------------------
+  # grafana: the dashboard.
+  #
+  # Fully provisioned from ops/grafana. Nothing is clicked into existence, so
+  # the container holds no state worth keeping and can be recreated freely.
+  # -------------------------------------------------------------------------
+  grafana:
+    <<: *service-defaults
+    image: grafana/grafana:11.5.0
+    container_name: auction-grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      # --- Anonymous access -------------------------------------------------
+      # No login, no password, straight to the dashboard. This is the "zero
+      # click" requirement and it is ONLY acceptable because the port is bound
+      # to 127.0.0.1 above. Admin role is what lets a visitor explore and edit
+      # panels in the browser during a demo; provisioned files are marked
+      # non-editable so nothing they do can persist past a restart.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+
+      # Land on the auction dashboard instead of Grafana's welcome page. This
+      # takes a FILE PATH, not a uid, and the path is the one the dashboards
+      # provider mounts -- see ops/grafana/provisioning/dashboards/dashboards.yaml.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/auction-overview.json
+
+      # --- Noise reduction --------------------------------------------------
+      # A demo machine is often offline, and both of these make blocking
+      # outbound calls that stall the UI when it is.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: dark
+      GF_LOG_LEVEL: warn
+      # Nothing here needs to install a plugin, and the attempt fails offline.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Mounted where dashboards.yaml points its `options.path`. Read-only, so
+      # a browser edit can never write back over the reviewed file -- the JSON
+      # in git stays the source of truth.
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      # SECURITY: 127.0.0.1 is deliberate and load-bearing here. The settings
+      # above give every visitor Admin with no password.
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    # NOT read-only, unlike the two services above. Grafana keeps a SQLite
+    # database, a plugin directory and a PNG cache under /var/lib/grafana, and
+    # that path already carries the read-only dashboards bind mount, so a tmpfs
+    # over the parent would shadow it. Relocating the data with GF_PATHS_DATA
+    # and GF_PATHS_PLUGINS into a tmpfs would allow read_only: true; it is not
+    # done here because the state is disposable and the container still runs
+    # non-root with ALL capabilities dropped and no-new-privileges set.
+    read_only: false
+    stop_grace_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+        reservations:
+          memory: 128m
