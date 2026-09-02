@@ -1,0 +1,76 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "$comment": [
+    "Manifest-driven release-please configuration.",
+    "",
+    "WHY release-type 'simple': this repository ships DOCKER IMAGES, not npm",
+    "packages. The 'node' release type would rewrite package.json versions and",
+    "expect a publish step that does not exist here. 'simple' tracks the",
+    "version in .release-please-manifest.json, writes the changelog, tags, and",
+    "stops -- which is exactly the contract the release workflow needs before",
+    "it builds and pushes to ghcr.io.",
+    "",
+    "WHY the linked-versions plugin: contracts and web are a matched pair. The",
+    "web app is built against a specific ABI, so shipping web 1.3.0 against",
+    "contracts 1.1.0 is a support question nobody wants to answer. Linking",
+    "them means one version number moves everything, and the tags on all three",
+    "images always agree.",
+    "",
+    "WHY separate-pull-requests is false: one release PR is one human review",
+    "and one merge, which produces one coherent set of image tags."
+  ],
+  "release-type": "simple",
+  "separate-pull-requests": false,
+  "include-v-in-tag": true,
+  "$comment-tags": [
+    "include-component-in-tag defaults to true here so the workspace releases",
+    "get distinct tags (contracts-v1.1.0, web-v1.1.0). The ROOT overrides it to",
+    "false so the headline tag stays a bare v1.1.0. Without that override all",
+    "three components would try to create the same tag and the release would",
+    "fail on the second one."
+  ],
+  "include-component-in-tag": true,
+  "pull-request-title-pattern": "chore(main): release ${version}",
+  "pull-request-header": "Merging this PR tags the release and builds the ghcr.io images.",
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "build", "section": "Build System" },
+    { "type": "ci", "section": "Continuous Integration" },
+    { "type": "refactor", "section": "Refactoring", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "chore", "section": "Miscellaneous", "hidden": true }
+  ],
+  "packages": {
+    ".": {
+      "$comment": "The root component. Its version is what the image tags carry, so it is the one users see. Tag is a bare vX.Y.Z.",
+      "package-name": "decentralised-auction",
+      "component": "decentralised-auction",
+      "include-component-in-tag": false,
+      "changelog-path": "CHANGELOG.md"
+    },
+    "contracts": {
+      "$comment": "Solidity + Hardhat workspace. Its own changelog, but never its own version -- see linked-versions below.",
+      "package-name": "contracts",
+      "component": "contracts",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "web": {
+      "$comment": "Vite frontend workspace. Built against the contracts ABI, hence linked.",
+      "package-name": "web",
+      "component": "web",
+      "changelog-path": "CHANGELOG.md"
+    }
+  },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "$comment": "Forces every listed component onto one version number, chosen by the largest bump any of them earned. 'groupName' labels the combined release PR.",
+      "groupName": "decentralised-auction",
+      "components": ["decentralised-auction", "contracts", "web"]
+    }
+  ]
+}
