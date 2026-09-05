@@ -57,17 +57,17 @@ library OnChainArt {
         // Single quotes are used inside the SVG so that nothing in it needs
         // escaping when it is placed into the JSON string below.
         string memory json = string.concat(
-            '{"name":"Auction House Demo #',
+            "{\"name\":\"Auction House Demo #",
             tokenId.toString(),
-            '","description":"A fully on-chain generative piece. The image is an SVG built by the contract at read time and returned as a data URI, so this token needs no IPFS gateway and no external host to render.","image":"data:image/svg+xml;base64,',
+            "\",\"description\":\"A fully on-chain generative piece. The image is an SVG built by the contract at read time and returned as a data URI, so this token needs no IPFS gateway and no external host to render.\",\"image\":\"data:image/svg+xml;base64,",
             Base64.encode(bytes(svg)),
-            '","attributes":[{"trait_type":"Hue","value":',
+            "\",\"attributes\":[{\"trait_type\":\"Hue\",\"value\":",
             hue.toString(),
-            '},{"trait_type":"Rings","value":',
+            "},{\"trait_type\":\"Rings\",\"value\":",
             rings.toString(),
-            '},{"trait_type":"Palette","value":"',
+            "},{\"trait_type\":\"Palette\",\"value\":\"",
             warm ? "Warm" : "Cool",
-            '"}]}'
+            "\"}]}"
         );
 
         return string.concat("data:application/json;base64,", Base64.encode(bytes(json)));

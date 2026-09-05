@@ -167,12 +167,12 @@ Run `make audit` to reproduce this. It runs [Slither](https://github.com/crytic/
 The test suite is the other half of the evidence:
 
 ```
-92 tests passing
-├── 68 Solidity
+148 tests passing
+├── 112 Solidity
 │   ├── fuzz tests at 512 runs each
 │   ├── 7 invariants at 128 runs x depth 24
-│   └── 18 regression tests, each named after the bug it closes
-└── 24 TypeScript integration tests
+│   └── regression tests, each named after the bug it closes
+└── 36 TypeScript integration tests
 ```
 
 The regression tests use real attacker contracts, not mocks of the idea:

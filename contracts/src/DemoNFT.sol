@@ -116,7 +116,7 @@ contract DemoNFT is ERC721URIStorage {
      */
     function contractURI() external pure returns (string memory) {
         return
-            'data:application/json;utf8,{"name":"Auction House Demo",'
+            "data:application/json;utf8,{\"name\":\"Auction House Demo\","
             '"description":"Demonstration collection for a local-first NFT auction house. '
             'Generative tokens render entirely on chain.","image":"","external_link":""}';
     }
