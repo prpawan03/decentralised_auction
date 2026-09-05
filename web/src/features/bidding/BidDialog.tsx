@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { parseEther, formatEther, type Address } from "viem";
+import { encodeFunctionData, parseEther, formatEther, type Address } from "viem";
 import {
   useAccount,
   useBalance,
   useEstimateFeesPerGas,
+  useEstimateGas,
   useGasPrice,
   useSimulateContract,
   useWriteContract,
@@ -114,7 +115,18 @@ export function BidDialog({ auction, minimumBid, open, onOpenChange }: BidDialog
      answer eth_gasPrice when that is unavailable. Either figure is better than
      asking someone to approve a spend with no cost shown. */
   const legacyGasPrice = useGasPrice({ query: { enabled: open && isConnected && !fees.data } });
-  const gasLimit = simulation.data?.request.gas;
+  /* simulateContract checks that the call would succeed; it does not estimate
+     gas, so `request.gas` is undefined and the fee line was a permanent dash
+     with a message that blamed the node. Estimate the same call explicitly
+     once the simulation has passed. */
+  const gasEstimate = useEstimateGas({
+    to: auctionHouse.address,
+    data: encodeFunctionData({ abi: auctionHouse.abi, functionName: "bid", args: [auction.id] }),
+    ...(parsed !== null ? { value: parsed } : {}),
+    ...(address ? { account: address } : {}),
+    query: { enabled: open && isConnected && simulation.isSuccess, staleTime: 4_000 },
+  });
+  const gasLimit = gasEstimate.data ?? simulation.data?.request.gas;
   const gasPrice = fees.data?.maxFeePerGas ?? fees.data?.gasPrice ?? legacyGasPrice.data;
   const feeEstimate = gasLimit !== undefined && gasPrice !== undefined ? gasLimit * gasPrice : null;
 
@@ -316,8 +328,8 @@ export function BidDialog({ auction, minimumBid, open, onOpenChange }: BidDialog
 
           {feeEstimate === null && simulation.isSuccess ? (
             <p className="mt-2 text-[0.6875rem] text-[var(--color-ink-3)]">
-              The node did not return fee data, so the gas figure is unavailable. Your wallet will
-              show the final cost before you sign.
+              The gas estimate is not available yet. Your wallet will show the final cost
+              before you sign.
             </p>
           ) : null}
         </div>

@@ -59,7 +59,7 @@ export function RootLayout() {
             </span>
           </NavLink>
 
-          <nav aria-label="Main" className="min-w-0 flex-1">
+          <nav aria-label="Main" className="order-last min-w-0 basis-full sm:order-none sm:flex-1 sm:basis-auto">
             <ul className="flex items-center gap-1 overflow-x-auto">
               {NAV.map((item) => (
                 <li key={item.to}>
