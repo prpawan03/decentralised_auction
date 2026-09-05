@@ -85,6 +85,20 @@ export const listingSchema = z
        and the existing English rules stay exactly as they were. */
     startPrice: ethAmount("Opening price").default("0"),
     floorPrice: ethAmount("Floor price").default("0"),
+    /* English only, as a PERCENTAGE. Sellers think in percent, the contract
+       stores basis points, and the conversion belongs here rather than in a
+       form handler. Defaulted to the contract's own default so an untouched
+       form produces exactly the listing it always did. */
+    minIncrementPercent: z
+      .string()
+      .trim()
+      .refine((v) => /^\d{1,2}(\.\d{1,2})?$/.test(v), {
+        message: "Enter the bid step as a percentage, like 5 or 2.5",
+      })
+      .refine((v) => Number(v) * 100 <= Number(CONTRACT_LIMITS.MAX_INCREMENT_BPS), {
+        message: `The largest bid step this contract accepts is ${Number(CONTRACT_LIMITS.MAX_INCREMENT_BPS) / 100}%.`,
+      })
+      .default(String(Number(CONTRACT_LIMITS.DEFAULT_INCREMENT_BPS) / 100)),
     durationSeconds: z
       .number({ message: "Choose how long the auction runs." })
       .int("Duration must be a whole number of seconds.")
@@ -188,7 +202,37 @@ export function toDutchCreateArgs(values: ListingValues) {
  * validated them, rather than being reassembled at the call site.
  */
 export function toCreateCall(values: ListingValues) {
-  return values.format === "dutch"
-    ? ({ functionName: "createDutchAuction", args: toDutchCreateArgs(values) } as const)
-    : ({ functionName: "createAuction", args: toCreateArgs(values) } as const);
+  if (values.format === "dutch") {
+    return { functionName: "createDutchAuction", args: toDutchCreateArgs(values) } as const;
+  }
+  /* The default step keeps the original entry point. It is the signature the
+     seed script, the deployed ABI and the whole test suite already use, so a
+     seller who does not touch the field produces exactly the transaction this
+     form has always produced. */
+  if (toIncrementBps(values) === Number(CONTRACT_LIMITS.DEFAULT_INCREMENT_BPS)) {
+    return { functionName: "createAuction", args: toCreateArgs(values) } as const;
+  }
+  return {
+    functionName: "createAuctionWithIncrement",
+    args: toCreateWithIncrementArgs(values),
+  } as const;
+}
+
+/** The seller's percentage as the basis points the contract stores. */
+export function toIncrementBps(values: ListingValues): number {
+  /* At most two decimals and at most 50, both enforced by the schema, so this
+     multiplication is exact in a double and the rounding is belt-and-braces. */
+  return Math.round(Number(values.minIncrementPercent) * 100);
+}
+
+/** The argument tuple `createAuctionWithIncrement` takes. */
+export function toCreateWithIncrementArgs(values: ListingValues) {
+  return [
+    values.nft as `0x${string}`,
+    BigInt(values.tokenId),
+    parseEther(values.reservePrice as `${number}`),
+    parseEther(values.buyNowPrice as `${number}`),
+    BigInt(values.durationSeconds),
+    toIncrementBps(values),
+  ] as const;
 }

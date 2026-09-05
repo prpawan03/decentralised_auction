@@ -195,6 +195,13 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
     /// @param min {MIN_DURATION}.
     /// @param max {MAX_DURATION}.
     error DurationOutOfRange(uint64 provided, uint64 min, uint64 max);
+
+    /**
+     * @notice The seller asked for a bid step the contract will not accept.
+     * @param provided The requested step, in basis points of the leading bid.
+     * @param max The largest step allowed.
+     */
+    error IncrementOutOfRange(uint16 provided, uint16 max);
     /// @notice A non-zero buy-now price MUST be at least {MIN_INCREMENT} and at
     ///         least the reserve price.
     /// @param buyNow The buy-now price that was asked for.

@@ -160,11 +160,14 @@ range. `STATUS_NAMES` was also missing `DeliveryFailed`, so status 4 printed as
   value) are the trap; use SafeERC20 and measure balances, do not trust
   arguments.
 - **ERC-1155 and bundle lots.** More than one item behind a single auction.
-- **Per-auction minimum increment.** The struct field exists in
-  `contracts/src/core/AuctionCore.sol`, but `EnglishAuction.createAuction`
-  passes `DEFAULT_INCREMENT_BPS` into `_openAuction` unconditionally, so
-  sellers cannot set their own bid step. The cheapest item on this list, and
-  `_openAuction` already takes the parameter.
+- ~~Per-auction minimum increment.~~ **Done.** `createAuctionWithIncrement`
+  exposes the step; `createAuction` keeps its exact signature and delegates
+  with `DEFAULT_INCREMENT_BPS`, so the deployed ABI, the seed script and the
+  whole test suite are untouched. Capped at `MAX_INCREMENT_BPS` (50%) so a
+  mistyped step reverts at listing time instead of producing an auction that
+  silently accepts one bid. 0 is legal and falls back to the flat
+  `MIN_INCREMENT` floor. The listing form asks for a percentage and only routes
+  to the new entry point when the seller actually changes it.
 - **Scheduled start times.** `startTime` is always `block.timestamp`, so you
   cannot list now and open bidding on Friday.
 - **Proxy / automatic bidding.** Commit a maximum; the contract bids up by the

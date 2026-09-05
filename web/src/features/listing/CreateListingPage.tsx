@@ -56,6 +56,7 @@ export default function CreateListingPage() {
       buyNowPrice: "0",
       startPrice: "1",
       floorPrice: "0",
+      minIncrementPercent: "5",
       durationSeconds: 600,
     },
   });
@@ -301,6 +302,17 @@ export default function CreateListingPage() {
               {...register("buyNowPrice")}
               {...(errors.buyNowPrice?.message ? { error: errors.buyNowPrice.message } : {})}
               hint="Ends the auction immediately at this price. Must be above the reserve. 0 switches buy-now off — it never means free."
+              autoComplete="off"
+            />
+            <Field
+              label="Minimum bid step"
+              suffix="%"
+              inputMode="decimal"
+              {...register("minIncrementPercent")}
+              {...(errors.minIncrementPercent?.message
+                ? { error: errors.minIncrementPercent.message }
+                : {})}
+              hint="How much each bid must beat the last one by. 5% is the default. There is also a flat floor, so a tiny percentage of a tiny bid still has to move the price."
               autoComplete="off"
             />
           </div>

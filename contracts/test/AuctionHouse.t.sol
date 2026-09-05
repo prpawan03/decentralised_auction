@@ -885,4 +885,108 @@ contract AuctionHouseTest is AuctionHouseBase {
         uint256 next = house.minimumBid(id);
         assertGe(next, uint256(amount) + house.MIN_INCREMENT(), "the step fell below the floor");
     }
+    // ---------------------------------------------------------------------
+    // Per-auction minimum increment
+    // ---------------------------------------------------------------------
+
+    /**
+     * @notice A seller can set their own bid step, and the ladder honours it.
+     * @dev The whole point of the feature: 500 bps was applied to every
+     *      listing, so a seller who wanted 20% steps could not ask for them.
+     */
+    function test_SellerCanChooseTheBidStep() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        vm.prank(seller);
+        // 2000 bps = 20%.
+        uint256 id = house.createAuctionWithIncrement(address(nft), tokenId, 0, 0, 1 hours, 2000);
+
+        assertEq(house.getAuction(id).minIncrementBps, 2000, "the step was not stored");
+
+        vm.deal(alice, 100 ether);
+        vm.prank(alice);
+        house.bid{value: 10 ether}(id);
+
+        // 10 ETH + 20% = 12 ETH, not the 10.5 ETH the default would have asked.
+        assertEq(house.minimumBid(id), 12 ether, "the ladder ignored the seller's step");
+    }
+
+    /// @notice The default entry point is unchanged by the new one existing.
+    function test_CreateAuctionStillUsesTheDefaultStep() public {
+        (uint256 id,) = _listSimple(seller);
+        assertEq(
+            house.getAuction(id).minIncrementBps,
+            house.DEFAULT_INCREMENT_BPS(),
+            "createAuction stopped applying the default"
+        );
+    }
+
+    /**
+     * @notice A zero step is legal and falls back to the flat floor.
+     * @dev Not a disabled increment: {_minimumBid} already floors every step at
+     *      {MIN_INCREMENT}, so 0 bps means "any bid at least MIN_INCREMENT
+     *      higher", which is a coherent thing for a seller to want.
+     */
+    function test_ZeroStepFallsBackToTheFlatFloor() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        vm.prank(seller);
+        uint256 id = house.createAuctionWithIncrement(address(nft), tokenId, 0, 0, 1 hours, 0);
+
+        vm.deal(alice, 100 ether);
+        vm.prank(alice);
+        house.bid{value: 10 ether}(id);
+
+        assertEq(house.minimumBid(id), 10 ether + house.MIN_INCREMENT(), "0 bps lost the floor");
+    }
+
+    /// @notice A step above the cap is refused at listing time.
+    function test_RevertWhen_StepIsAboveTheCap() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        uint16 cap = house.MAX_INCREMENT_BPS();
+        uint16 tooBig = cap + 1;
+
+        vm.prank(seller);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionCore.IncrementOutOfRange.selector, tooBig, cap)
+        );
+        house.createAuctionWithIncrement(address(nft), tokenId, 0, 0, 1 hours, tooBig);
+    }
+
+    /// @notice The cap itself is allowed: the boundary is inclusive.
+    function test_StepAtTheCapIsAccepted() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        uint16 cap = house.MAX_INCREMENT_BPS();
+        vm.prank(seller);
+        uint256 id = house.createAuctionWithIncrement(address(nft), tokenId, 0, 0, 1 hours, cap);
+        assertEq(house.getAuction(id).minIncrementBps, cap);
+    }
+
+    /// @notice The new entry point enforces every rule the old one does.
+    function test_RevertWhen_NewEntryPointGetsABadBuyNow() public {
+        uint256 tokenId = _mintAndApprove(seller);
+        vm.prank(seller);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AuctionCore.InvalidBuyNowPrice.selector, uint96(1 ether), uint96(2 ether)
+            )
+        );
+        house.createAuctionWithIncrement(address(nft), tokenId, 2 ether, 1 ether, 1 hours, 500);
+    }
+
+    /// @notice Any step in range produces a ladder that still beats the leader.
+    /// @param stepSeed The requested step, bounded into the legal range.
+    function testFuzz_AnyLegalStepStillBeatsTheLeader(uint16 stepSeed) public {
+        uint16 step = uint16(bound(stepSeed, 0, house.MAX_INCREMENT_BPS()));
+        uint256 tokenId = _mintAndApprove(seller);
+        vm.prank(seller);
+        uint256 id = house.createAuctionWithIncrement(address(nft), tokenId, 0, 0, 1 hours, step);
+
+        vm.deal(alice, 1000 ether);
+        vm.prank(alice);
+        house.bid{value: 5 ether}(id);
+
+        // Whatever the seller chose, the next bid must be strictly higher than
+        // the standing one. A step that rounded to zero would let a bidder tie.
+        assertGt(house.minimumBid(id), 5 ether, "the ladder stopped rising");
+    }
+
 }

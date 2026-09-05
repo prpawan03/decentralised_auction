@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseEther } from "viem";
-import { listingSchema, toCreateArgs, toCreateCall } from "./listingSchema";
+import { listingSchema, toCreateArgs, toCreateCall, toIncrementBps } from "./listingSchema";
 
 const valid = {
   nft: "0x1234567890abcdef1234567890abcdef12345678",
@@ -156,5 +156,48 @@ describe("Dutch listings", () => {
   it("still routes an English listing to createAuction", () => {
     const call = toCreateCall(listingSchema.parse(valid));
     expect(call.functionName).toBe("createAuction");
+  });
+});
+
+describe("minimum bid step", () => {
+  it("defaults to the contract's own 5% and keeps the original entry point", () => {
+    /* An untouched form must produce exactly the transaction this form always
+       produced, against the signature the seed script and the deployed ABI
+       already use. */
+    const parsed = listingSchema.parse(valid);
+    expect(parsed.minIncrementPercent).toBe("5");
+    expect(toIncrementBps(parsed)).toBe(500);
+    expect(toCreateCall(parsed).functionName).toBe("createAuction");
+  });
+
+  it("routes to createAuctionWithIncrement once the step differs", () => {
+    const parsed = listingSchema.parse({ ...valid, minIncrementPercent: "20" });
+    const call = toCreateCall(parsed);
+    expect(call.functionName).toBe("createAuctionWithIncrement");
+    expect(call.args[5]).toBe(2000);
+  });
+
+  it("converts fractional percentages to whole basis points", () => {
+    expect(toIncrementBps(listingSchema.parse({ ...valid, minIncrementPercent: "2.5" }))).toBe(250);
+    expect(toIncrementBps(listingSchema.parse({ ...valid, minIncrementPercent: "0.01" }))).toBe(1);
+    expect(toIncrementBps(listingSchema.parse({ ...valid, minIncrementPercent: "0" }))).toBe(0);
+  });
+
+  it("accepts a zero step, which the contract floors at MIN_INCREMENT", () => {
+    expect(listingSchema.safeParse({ ...valid, minIncrementPercent: "0" }).success).toBe(true);
+  });
+
+  it("rejects a step above the contract's cap", () => {
+    /* Mirrors IncrementOutOfRange. 50% is the boundary and is legal. */
+    expect(listingSchema.safeParse({ ...valid, minIncrementPercent: "50" }).success).toBe(true);
+    expect(listingSchema.safeParse({ ...valid, minIncrementPercent: "51" }).success).toBe(false);
+  });
+
+  it("rejects values the contract could not store as whole basis points", () => {
+    /* More than two decimals would round, and a seller who typed 2.555 would
+       get a listing that does not match what they asked for. */
+    expect(listingSchema.safeParse({ ...valid, minIncrementPercent: "2.555" }).success).toBe(false);
+    expect(listingSchema.safeParse({ ...valid, minIncrementPercent: "abc" }).success).toBe(false);
+    expect(listingSchema.safeParse({ ...valid, minIncrementPercent: "-5" }).success).toBe(false);
   });
 });

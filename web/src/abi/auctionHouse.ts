@@ -183,6 +183,22 @@ export const auctionHouseAbi = [
   {
     "inputs": [
       {
+        "internalType": "uint16",
+        "name": "provided",
+        "type": "uint16"
+      },
+      {
+        "internalType": "uint16",
+        "name": "max",
+        "type": "uint16"
+      }
+    ],
+    "name": "IncrementOutOfRange",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint96",
         "name": "buyNow",
         "type": "uint96"
@@ -795,6 +811,19 @@ export const auctionHouseAbi = [
   },
   {
     "inputs": [],
+    "name": "MAX_INCREMENT_BPS",
+    "outputs": [
+      {
+        "internalType": "uint16",
+        "name": "",
+        "type": "uint16"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "MAX_PAGE_SIZE",
     "outputs": [
       {
@@ -933,6 +962,50 @@ export const auctionHouseAbi = [
       }
     ],
     "name": "createAuction",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "auctionId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "nft",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint96",
+        "name": "reservePrice",
+        "type": "uint96"
+      },
+      {
+        "internalType": "uint96",
+        "name": "buyNowPrice",
+        "type": "uint96"
+      },
+      {
+        "internalType": "uint64",
+        "name": "duration",
+        "type": "uint64"
+      },
+      {
+        "internalType": "uint16",
+        "name": "minIncrementBps",
+        "type": "uint16"
+      }
+    ],
+    "name": "createAuctionWithIncrement",
     "outputs": [
       {
         "internalType": "uint256",

@@ -31,6 +31,7 @@ export const CONTRACT_LIMITS = {
   ANTI_SNIPE_WINDOW: 300n, // 5 minutes
   MAX_EXTENSIONS: 20n,
   DEFAULT_INCREMENT_BPS: 500n, // 5%
+  MAX_INCREMENT_BPS: 5_000n, // 50%, the largest step a seller may set
   MIN_INCREMENT: 100_000_000_000_000n, // 0.0001 ether
   MAX_FEE_BPS: 1000n,
   MAX_PAGE_SIZE: 100n,

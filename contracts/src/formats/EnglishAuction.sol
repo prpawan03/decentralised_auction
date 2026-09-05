@@ -38,6 +38,16 @@ abstract contract EnglishAuction is AuctionCore {
     uint32 public constant MAX_EXTENSIONS = 20;
     /// @notice The default minimum bid step, in basis points. 500 bps is 5%.
     uint16 public constant DEFAULT_INCREMENT_BPS = 500;
+
+    /**
+     * @notice The largest bid step a seller may set, in basis points: 50%.
+     * @dev A cap, not a safety boundary - an absurd step only harms the
+     *      seller's own listing, by making a second bid impractical. It exists
+     *      so that a mistyped value reverts at listing time instead of
+     *      producing an auction that silently takes exactly one bid and looks
+     *      broken to everyone who tries to raise it.
+     */
+    uint16 public constant MAX_INCREMENT_BPS = 5_000;
     /// @notice The floor on the bid step, and the smallest first bid allowed.
     uint96 public constant MIN_INCREMENT = 0.0001 ether;
 
@@ -65,13 +75,77 @@ abstract contract EnglishAuction is AuctionCore {
         uint96 buyNowPrice,
         uint64 duration
     ) external nonReentrant whenNotPaused returns (uint256 auctionId) {
+        auctionId = _createEnglish(
+            nft, tokenId, reservePrice, buyNowPrice, duration, DEFAULT_INCREMENT_BPS
+        );
+    }
+
+    /**
+     * @notice Escrows the NFT and opens a Live auction with a chosen bid step.
+     * @dev The same listing as {createAuction}, with the one parameter that
+     *      function fixes at {DEFAULT_INCREMENT_BPS} exposed.
+     *
+     *      This is a SEPARATE function rather than a longer `createAuction`,
+     *      on purpose. `createAuction` is the signature the frontend, the seed
+     *      script and the whole existing test suite already call, and it is
+     *      part of the deployed ABI. Adding a parameter to it would break every
+     *      one of those for a feature most sellers will never set. The default
+     *      path stays byte-for-byte what it was; the capability is additive.
+     * @param nft The ERC-721 contract.
+     * @param tokenId The token to sell.
+     * @param reservePrice The lowest winning price. 0 means no reserve.
+     * @param buyNowPrice The instant purchase price. 0 disables buy-now.
+     * @param duration Seconds of bidding, from {MIN_DURATION} to {MAX_DURATION}.
+     * @param minIncrementBps The bid step, in basis points of the leading bid.
+     *        0 is legal and means the step falls back to the flat
+     *        {MIN_INCREMENT} floor that {_minimumBid} already applies.
+     * @return auctionId The id of the new auction.
+     */
+    function createAuctionWithIncrement(
+        address nft,
+        uint256 tokenId,
+        uint96 reservePrice,
+        uint96 buyNowPrice,
+        uint64 duration,
+        uint16 minIncrementBps
+    ) external nonReentrant whenNotPaused returns (uint256 auctionId) {
+        auctionId = _createEnglish(
+            nft, tokenId, reservePrice, buyNowPrice, duration, minIncrementBps
+        );
+    }
+
+    /**
+     * @notice The listing path both entry points share.
+     * @dev Private, and neither guard is repeated here: `nonReentrant` and
+     *      `whenNotPaused` sit on the two external functions, and a private
+     *      call cannot bypass them. Putting `nonReentrant` on this instead
+     *      would make the external wrappers re-enter their own guard.
+     * @param nft The ERC-721 contract.
+     * @param tokenId The token to sell.
+     * @param reservePrice The lowest winning price.
+     * @param buyNowPrice The instant purchase price. 0 disables buy-now.
+     * @param duration Seconds of bidding.
+     * @param minIncrementBps The bid step, in basis points.
+     * @return auctionId The id of the new auction.
+     */
+    function _createEnglish(
+        address nft,
+        uint256 tokenId,
+        uint96 reservePrice,
+        uint96 buyNowPrice,
+        uint64 duration,
+        uint16 minIncrementBps
+    ) private returns (uint256 auctionId) {
         // Prevents a listing whose buy-now price is free or below the reserve.
         if (buyNowPrice != 0 && (buyNowPrice < MIN_INCREMENT || buyNowPrice < reservePrice)) {
             revert InvalidBuyNowPrice(buyNowPrice, reservePrice);
         }
+        if (minIncrementBps > MAX_INCREMENT_BPS) {
+            revert IncrementOutOfRange(minIncrementBps, MAX_INCREMENT_BPS);
+        }
 
         auctionId = _openAuction(
-            nft, tokenId, reservePrice, buyNowPrice, duration, DEFAULT_INCREMENT_BPS, Format.English
+            nft, tokenId, reservePrice, buyNowPrice, duration, minIncrementBps, Format.English
         );
     }
 
