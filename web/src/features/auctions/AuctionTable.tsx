@@ -77,10 +77,15 @@ export function AuctionTable({
   captionHidden = true,
   metadata,
 }: AuctionTableProps) {
+  /* The wrapper is `relative` on purpose. The rows contain absolutely
+     positioned children (the live stripe, the sr-only labels). Without a
+     positioned scroll container their boxes belong to an ancestor outside the
+     clip, so the page itself grew to the table's width and scrolled sideways
+     on phones even though the table already had its own scrollbar. */
   return (
     /* The table scrolls inside its own box; the page body never scrolls
        sideways (SC 1.4.10 Reflow). */
-    <div className="w-full overflow-x-auto">
+    <div className="relative w-full overflow-x-auto">
       <table className="w-full min-w-[52rem] border-collapse text-left">
         <caption
           className={cn(
