@@ -115,7 +115,7 @@ export function BuyNowButton({ auction }: { auction: Auction }) {
         ) : null}
         {error && !error.rejected ? (
           <p role="alert" className="mt-3 border-l-2 border-[var(--color-danger)] py-1 pl-3 text-[0.8125rem] text-[var(--color-danger)]">
-            {error.message}
+            {decodeContractError(error).message}
           </p>
         ) : null}
       </Dialog>

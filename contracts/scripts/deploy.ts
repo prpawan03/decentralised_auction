@@ -44,6 +44,26 @@ const house = await viem.deployContract("AuctionHouse", [
 ]);
 console.log(`  AuctionHouse  ${house.address}`);
 
+// Multicall3. The web app batches every read through it at the canonical
+// CREATE2 address, and viem's chain definition points there. Anvil predeploys
+// it; the Hardhat node does not. Without this step the board shows "Could not
+// read the chain" for every route until something else puts code there.
+// Deploy the vendored source, then copy its runtime code to the canonical
+// address with hardhat_setCode, which only a local development node accepts.
+const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11" as const;
+const existing = await publicClient.getCode({ address: MULTICALL3 });
+if (existing && existing !== "0x") {
+  console.log(`  Multicall3    ${MULTICALL3} (already present)`);
+} else {
+  const multicall = await viem.deployContract("Multicall3");
+  const code = await publicClient.getCode({ address: multicall.address });
+  if (!code || code === "0x") throw new Error("Multicall3 deployed but has no code");
+  await connection.provider.request({ method: "hardhat_setCode", params: [MULTICALL3, code] });
+  const placed = await publicClient.getCode({ address: MULTICALL3 });
+  if (placed !== code) throw new Error("hardhat_setCode did not place Multicall3 at the canonical address");
+  console.log(`  Multicall3    ${MULTICALL3} (runtime code copied from ${multicall.address})`);
+}
+
 const blockNumber = await publicClient.getBlockNumber();
 
 const record = {
@@ -57,6 +77,7 @@ const record = {
   contracts: {
     AuctionHouse: house.address,
     DemoNFT: nft.address,
+    Multicall3: MULTICALL3,
   },
 };
 

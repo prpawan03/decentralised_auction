@@ -1,7 +1,7 @@
 import { lazy } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { RootLayout } from "./RootLayout";
-import { RouteErrorBoundary } from "./ErrorBoundary";
+import { NotFoundPage, RouteErrorBoundary } from "./ErrorBoundary";
 
 /**
  * Real URLs, lazily loaded.
@@ -38,7 +38,7 @@ export const router = createBrowserRouter([
       { path: "u/:address", element: <PortfolioPage />, errorElement: <RouteErrorBoundary /> },
       /* Old bookmark shape, kept working rather than 404ing. */
       { path: "auctions", element: <Navigate to="/" replace /> },
-      { path: "*", element: <RouteErrorBoundary /> },
+      { path: "*", element: <NotFoundPage /> },
     ],
   },
 ]);

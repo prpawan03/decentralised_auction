@@ -4,6 +4,7 @@ import {
   useAccount,
   useBalance,
   useEstimateFeesPerGas,
+  useGasPrice,
   useSimulateContract,
   useWriteContract,
 } from "wagmi";
@@ -109,8 +110,12 @@ export function BidDialog({ auction, minimumBid, open, onOpenChange }: BidDialog
 
   /* -- 2. GAS ------------------------------------------------------------ */
   const fees = useEstimateFeesPerGas({ query: { enabled: open && isConnected } });
+  /* EIP-1559 estimation needs a recent fee history; a quiet local node can
+     answer eth_gasPrice when that is unavailable. Either figure is better than
+     asking someone to approve a spend with no cost shown. */
+  const legacyGasPrice = useGasPrice({ query: { enabled: open && isConnected && !fees.data } });
   const gasLimit = simulation.data?.request.gas;
-  const gasPrice = fees.data?.maxFeePerGas ?? fees.data?.gasPrice;
+  const gasPrice = fees.data?.maxFeePerGas ?? fees.data?.gasPrice ?? legacyGasPrice.data;
   const feeEstimate = gasLimit !== undefined && gasPrice !== undefined ? gasLimit * gasPrice : null;
 
   const totalCost = parsed !== null && feeEstimate !== null ? parsed + feeEstimate : null;

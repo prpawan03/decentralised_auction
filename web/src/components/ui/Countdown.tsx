@@ -76,6 +76,13 @@ export function Countdown({ endTime, size = "md", label, className }: CountdownP
   const [announcement, setAnnouncement] = useState("");
   const lastThreshold = useRef<number | null>(null);
 
+  /* An anti-snipe extension moves endTime. Forget the last threshold so the
+     next tick announces the new remaining time instead of leaving the region
+     showing a value that is now several minutes stale. */
+  useEffect(() => {
+    lastThreshold.current = null;
+  }, [endTime]);
+
   useEffect(() => {
     const t = crossedThreshold(remaining);
     if (t === lastThreshold.current) return;

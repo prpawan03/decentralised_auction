@@ -5,6 +5,7 @@ import { RainbowKitProvider, darkTheme, lightTheme } from "@rainbow-me/rainbowki
 import "@rainbow-me/rainbowkit/styles.css";
 import { wagmiConfig } from "@/config/wagmi";
 import { TickerProvider } from "@/hooks/useTicker";
+import { ChainClockAnchor } from "@/hooks/useChainClock";
 import { TxTrackerProvider } from "@/hooks/useTxTracker";
 import { ActivityProvider } from "@/hooks/useAuctionEvents";
 import { AlertsProvider } from "@/hooks/useAuctionAlerts";
@@ -53,6 +54,7 @@ export function Providers({ children }: { children: ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <RainbowKitThemeBridge>
           <TickerProvider>
+            <ChainClockAnchor />
             <TxTrackerProvider>
               <ActivityProvider>
                 <AlertsProvider>{children}</AlertsProvider>

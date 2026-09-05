@@ -1,5 +1,5 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import { cn } from "@/lib/cn";
 
 /**
@@ -35,6 +35,8 @@ export interface DialogProps {
   footer?: ReactNode;
   /** Blocks Escape and outside-click while a wallet prompt is open. */
   dismissable?: boolean;
+  /** Where focus goes on close. Defaults to whatever was focused when it opened. */
+  returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
 export function Dialog({
@@ -45,7 +47,19 @@ export function Dialog({
   children,
   footer,
   dismissable = true,
+  returnFocusTo,
 }: DialogProps) {
+  /* Radix restores focus to its own Trigger. Every opener in this app is a
+     plain button that flips `open`, so there is no Trigger and focus fell to
+     <body> on Escape (SC 2.4.3). Remember what was focused as the dialog
+     opens, before Radix moves focus inside it, and put it back on close. */
+  const openerRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  if (open && !wasOpenRef.current && typeof document !== "undefined") {
+    openerRef.current = document.activeElement as HTMLElement | null;
+  }
+  wasOpenRef.current = open;
+
   return (
     <RadixDialog.Root open={open} onOpenChange={onOpenChange}>
       <RadixDialog.Portal>
@@ -60,6 +74,13 @@ export function Dialog({
              siblings instead. Several screen readers still key off the
              attribute, and SC 4.1.2 is cheap to satisfy explicitly. */
           aria-modal="true"
+          onCloseAutoFocus={(e) => {
+            const target = returnFocusTo?.current ?? openerRef.current;
+            if (target && document.contains(target)) {
+              e.preventDefault();
+              target.focus();
+            }
+          }}
           {...(dismissable
             ? {}
             : {

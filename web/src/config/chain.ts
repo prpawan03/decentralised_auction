@@ -5,11 +5,12 @@ import { config } from "./runtime";
  * The local chain, described from runtime config rather than a hard-coded
  * constant, so a rebuilt image can point at a different node.
  *
- * `contracts.multicall3` is the canonical CREATE2 address that Anvil and
- * Hardhat Node both pre-deploy. wagmi's `readContracts` uses it to fold the
- * auction grid into a single eth_call, and falls back to individual calls if
- * the node does not have it — so a node without Multicall3 is slower, not
- * broken.
+ * `contracts.multicall3` is the canonical CREATE2 address. wagmi's
+ * `readContracts` folds the auction grid into one eth_call through it and does
+ * NOT fall back to individual calls: a node with no code at this address shows
+ * "Could not read the chain" on every route. Anvil predeploys it; the Hardhat
+ * node does not, so contracts/scripts/deploy.ts deploys the vendored
+ * Multicall3 and copies its runtime code here with hardhat_setCode.
  */
 export const localChain = defineChain({
   id: config.chainId,

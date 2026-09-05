@@ -105,3 +105,8 @@ function Fallback({
     </main>
   );
 }
+
+/** The `*` route. A wrong URL is not an error in the app, so it must not be labelled as one. */
+export function NotFoundPage() {
+  return <Fallback title="No such page" detail="That URL does not match any route in this app." />;
+}

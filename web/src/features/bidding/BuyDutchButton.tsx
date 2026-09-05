@@ -151,7 +151,7 @@ export function BuyDutchButton({ auction }: { auction: Auction }) {
           /* The simulation is the gate. A chain clock further behind than the
              allowance shows up here as BidTooLow, before anything is signed. */
           <p role="alert" className="mt-3 text-[0.8125rem] text-[var(--color-danger)]">
-            {error.message}
+            {decodeContractError(error).message}
           </p>
         ) : null}
       </Dialog>

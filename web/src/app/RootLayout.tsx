@@ -49,7 +49,7 @@ export function RootLayout() {
       </a>
 
       <header className="sticky top-0 z-30 bg-[var(--color-ground)]">
-        <div className="flex h-14 items-center gap-6 border-b border-[var(--color-line)] px-4 lg:px-6">
+        <div className="flex min-h-14 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--color-line)] px-4 py-1 sm:h-14 sm:flex-nowrap sm:gap-6 sm:py-0 lg:px-6">
           <NavLink to="/" className="flex shrink-0 items-baseline gap-2 no-underline">
             <span className="text-sm font-semibold tracking-tight text-[var(--color-ink)]">
               AUCTIONHOUSE
@@ -60,7 +60,7 @@ export function RootLayout() {
           </NavLink>
 
           <nav aria-label="Main" className="min-w-0 flex-1">
-            <ul className="flex items-center gap-1">
+            <ul className="flex items-center gap-1 overflow-x-auto">
               {NAV.map((item) => (
                 <li key={item.to}>
                   <NavLink
@@ -89,11 +89,13 @@ export function RootLayout() {
           <button
             type="button"
             onClick={toggle}
+            aria-label={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
             className="tap inline-flex h-8 items-center rounded-[3px] border border-[var(--color-line-strong)] px-3 text-[0.75rem] text-[var(--color-ink-2)] hover:bg-[var(--color-raised)]"
           >
             {/* The label states the ACTION, not the current state, and it is
                 text rather than an icon, so it needs no extra name. */}
-            {theme === "dark" ? "Light theme" : "Dark theme"}
+            <span className="sm:hidden">Theme</span>
+            <span className="hidden sm:inline">{theme === "dark" ? "Light theme" : "Dark theme"}</span>
           </button>
 
           <WalletButton />

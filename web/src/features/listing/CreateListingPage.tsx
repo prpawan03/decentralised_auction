@@ -160,7 +160,7 @@ export default function CreateListingPage() {
     setSubmitError(null);
     if (!createSim.data) {
       setSubmitError(
-        createError?.message ??
+        (createError ? decodeContractError(createError).message : undefined) ??
           "The contract has not confirmed this listing would succeed yet. Wait a moment and try again.",
       );
       return;

@@ -28,8 +28,25 @@ interface TickerValue {
 
 const TickerContext = createContext<TickerValue | null>(null);
 
+/**
+ * Chain-time anchoring.
+ *
+ * The contract judges "ended", "ending soon" and the Dutch price by
+ * block.timestamp. The browser only has Date.now(). On a public chain the two
+ * agree to within a block; on a local node they can be minutes apart, because a
+ * seed script jumps the clock to settle closed auctions and interval mining
+ * only advances block time when a block is mined. Measured on this stack: 296 s.
+ *
+ * So the clock is wall time plus a skew, and the skew is re-derived from every
+ * new block by <ChainClockAnchor/> (hooks/useChainClock.tsx). Countdowns,
+ * status pills, the settle button and the Dutch price all read this one value,
+ * which is what makes them agree with the contract instead of with the laptop.
+ */
+const SkewContext = createContext<(skewSeconds: number) => void>(() => {});
+let skewSeconds = 0;
+
 function nowSeconds(): number {
-  return Math.floor(Date.now() / 1000);
+  return Math.floor(Date.now() / 1000) + skewSeconds;
 }
 
 export function TickerProvider({ children }: { children: ReactNode }) {
@@ -77,7 +94,22 @@ export function TickerProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<TickerValue>(() => ({ now }), [now]);
 
-  return <TickerContext.Provider value={value}>{children}</TickerContext.Provider>;
+  /* Re-anchor at once, so a corrected skew is visible on the next paint rather
+     than up to a second later. */
+  const setSkew = useMemo(
+    () => (next: number) => {
+      if (next === skewSeconds) return;
+      skewSeconds = next;
+      setNow(nowSeconds());
+    },
+    [],
+  );
+
+  return (
+    <SkewContext.Provider value={setSkew}>
+      <TickerContext.Provider value={value}>{children}</TickerContext.Provider>
+    </SkewContext.Provider>
+  );
 }
 
 /**
@@ -91,4 +123,9 @@ export function useNow(): number {
   const ctx = useContext(TickerContext);
   const [fallback] = useState(nowSeconds);
   return ctx ? ctx.now : fallback;
+}
+
+/** Lets the chain anchor publish the offset between block time and wall time. */
+export function useSetClockSkew(): (skewSeconds: number) => void {
+  return useContext(SkewContext);
 }
