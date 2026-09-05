@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "AuctionHouse \u2014 a reentrancy-safe, pull-payment NFT auction house for a local demo dapp.",
+  "description": "AuctionHouse — a reentrancy-safe, pull-payment NFT auction house for a local demo dapp.",
   "license": "MIT",
   "scripts": {
     "build": "hardhat build",
@@ -27,7 +27,7 @@
     "hardhat": "3.14.0",
     "solhint": "^6.0.0",
     "typescript": "^5.9.2",
-    "viem": "^2.47.6"
+    "viem": "2.55.19"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1"
