@@ -1,0 +1,28 @@
+{
+  "name": "auction-indexer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ponder indexer for the NFT auction demonstration. Reads AuctionHouse and DemoNFT events off the local chain and serves GraphQL, SQL and REST.",
+  "license": "MIT",
+  "//": "This package is DELIBERATELY NOT an npm workspace member of the repository root. Ponder pins its own toolchain, so joining the root workspace would hoist ponder's dependencies next to Hardhat's and let one resolution break the other. It also keeps `npm ci` in docker/indexer.Dockerfile reading indexer/package-lock.json only, so a contract dependency change does not invalidate the indexer image cache.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "ponder dev",
+    "start": "ponder start",
+    "codegen": "ponder codegen",
+    "typecheck": "ponder codegen && tsc --noEmit",
+    "db": "ponder db"
+  },
+  "dependencies": {
+    "hono": "^4.9.10",
+    "ponder": "0.17.8",
+    "viem": "^2.38.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "typescript": "^5.9.3"
+  }
+}

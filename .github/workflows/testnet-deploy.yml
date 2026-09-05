@@ -1,0 +1,278 @@
+# ---------------------------------------------------------------------------
+# Testnet deployment -- READY, BUT DELIBERATELY INERT.
+#
+# This workflow deploys the AuctionHouse contracts to a public testnet and
+# verifies the source on the relevant block explorer. It is committed so the
+# procedure is reviewed, versioned and diffable rather than living in
+# somebody's shell history. It CANNOT run on its own:
+#
+#   * The only trigger is `workflow_dispatch`. There is no push, no
+#     pull_request, no schedule and no `release` trigger. Nothing in this file
+#     can be reached by merging code.
+#   * The deploy job declares `environment: testnet`. If that environment has
+#     required reviewers, the job stops and waits for a human to approve it,
+#     and -- this is the part that matters -- the environment's secrets are
+#     NOT injected into the runner until that approval lands.
+#
+# So: an explicit human dispatch, then an explicit human approval. Two people,
+# two deliberate actions, before a single transaction is signed.
+#
+# ---------------------------------------------------------------------------
+# WHY `environment:` AND NOT A `vars.ENABLE_TESTNET` FLAG
+#
+# The obvious alternative is a repository variable and `if: vars.ENABLE_TESTNET
+# == 'true'` on every job. It looks like a kill switch. It is not one.
+#
+#   1. It is not a security boundary. `vars` are readable and writable by
+#      anyone with repository write access, with no review, no second
+#      approver and no record beyond an audit-log line nobody reads. Flipping
+#      it is a one-click, one-person action.
+#   2. It does not protect the secrets. Repository-level secrets are handed to
+#      the runner as soon as the job starts, whatever the `if` said about some
+#      other job. The flag gates EXECUTION, not ACCESS. An environment gates
+#      access: GitHub withholds the environment's secrets until every
+#      protection rule has passed, so an unapproved run never holds the
+#      deployer key at all.
+#   3. It adds a second place to look. Someone debugging "why did nothing
+#      happen?" now has to check the workflow file AND a settings page that is
+#      invisible in the diff. Two sources of truth, one of which is not in git.
+#   4. It gives nothing the environment does not already give, and the
+#      environment additionally provides:
+#        - required reviewers (approval gate, with an approver name recorded),
+#        - a deployment branch policy (only `main` may deploy; a fork branch
+#          or an attacker's PR branch cannot),
+#        - a wait timer, if a cooling-off period is wanted,
+#        - a deployment record on the repository's Environments page --
+#          who deployed what, when, and to where -- which is the thing you
+#          actually want during an incident.
+#
+# A boolean variable is a comment that thinks it is a control. Use the
+# environment.
+#
+# ---------------------------------------------------------------------------
+# LIMITATION: FREE PLANS AND PRIVATE REPOSITORIES
+#
+# Environment PROTECTION RULES -- required reviewers, wait timers, deployment
+# branch policies -- are available on GitHub Free only for PUBLIC
+# repositories. On a private repository on Free, you can still create an
+# environment and scope secrets to it, but the protection rules are a paid
+# feature (Team / Enterprise); the job will not pause and will not require an
+# approval.
+#
+# FALLBACK if this repository is private and on a Free plan, in order of
+# preference:
+#   a) Keep it public. This is a demo dapp with a throwaway mnemonic; there is
+#      nothing here that needs to be private, and public buys the whole
+#      protection-rule set plus free arm64 runners.
+#   b) Move the deploy to a separate repository that IS public, or upgrade the
+#      plan. The environment is worth the price of a Team seat if real funds
+#      are ever involved.
+#   c) If neither is possible, fall back to a BRANCH-scoped control that is
+#      still enforced by GitHub rather than by a variable: protect a
+#      `deploy/testnet` branch with required reviews, restrict who may push to
+#      it, and add `if: github.ref == 'refs/heads/deploy/testnet'` to the
+#      deploy job. Approving the branch push is then the approval gate. This
+#      is weaker -- the secrets are repository-scoped and reach the runner
+#      unconditionally -- so rotate the deployer key on a schedule and fund it
+#      with the minimum testnet balance that gets the job done.
+# ---------------------------------------------------------------------------
+
+name: Testnet deploy (manual)
+
+on:
+  # workflow_dispatch ONLY. Adding any other trigger to this file removes the
+  # human from the loop and should be treated as a security change, not a
+  # convenience change.
+  workflow_dispatch:
+    inputs:
+      network:
+        description: "Hardhat network name to deploy to"
+        required: true
+        type: choice
+        default: sepolia
+        options:
+          - sepolia
+          - baseSepolia
+          - arbitrumSepolia
+      verify:
+        description: "Verify the source on the block explorer after deploying"
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: "Compile and simulate only -- send no transaction"
+        required: false
+        type: boolean
+        default: true
+
+# One deployment at a time, and never cancel one in flight: a cancelled deploy
+# can leave a contract deployed but unrecorded, which is worse than a slow
+# queue.
+concurrency:
+  group: testnet-deploy-${{ inputs.network }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.network }}
+    runs-on: ubuntu-latest
+
+    # THE SECURITY BOUNDARY.
+    #
+    # Configure this environment at
+    #   Settings -> Environments -> testnet
+    # with, at minimum:
+    #   * Required reviewers: at least one person who is not the usual
+    #     dispatcher. The job pauses here until one of them approves.
+    #   * Deployment branch policy: `main` only. Without this, anyone able to
+    #     push any branch can dispatch a deploy from arbitrary code.
+    #   * Environment secrets: TESTNET_DEPLOYER_PRIVATE_KEY, TESTNET_RPC_URL,
+    #     ETHERSCAN_API_KEY. Scoping them HERE rather than to the repository
+    #     is the whole point -- an unapproved run never receives them.
+    #
+    # `url:` surfaces a clickable link on the Environments page so the
+    # deployment record points at the explorer, not just at a run id.
+    environment:
+      name: testnet
+      url: ${{ steps.deployed.outputs.explorer_url }}
+
+    # A belt-and-braces guard on top of the environment's branch policy. If
+    # someone creates the environment without a deployment branch policy, this
+    # still refuses to deploy from anything but the default branch. It is not
+    # a substitute for the policy -- an `if` can be edited in the same PR that
+    # abuses it -- but it fails loudly and early.
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        # `npm ci` and not `npm install`: a deploy MUST use the exact tree the
+        # lockfile pins. A resolved-at-deploy-time dependency is an unreviewed
+        # dependency signing transactions with a funded key.
+        run: npm ci
+
+      - name: Build the contracts
+        run: npm run build --workspace contracts
+
+      - name: Run the contract tests
+        # A testnet deploy is still a deploy. If the suite is red, the run
+        # stops before the key is ever used.
+        run: npm run test --workspace contracts
+
+      # -------------------------------------------------------------------
+      # PREREQUISITE, deliberately not satisfied in this branch.
+      #
+      # contracts/hardhat.config.ts currently defines only the in-process and
+      # `localhost` networks. Before this workflow can do anything, the config
+      # needs a `sepolia` / `baseSepolia` / `arbitrumSepolia` entry reading
+      # TESTNET_RPC_URL and TESTNET_DEPLOYER_PRIVATE_KEY from the environment,
+      # plus the `verify` plugin configuration described below.
+      #
+      # The step below therefore fails fast with a readable message rather
+      # than letting hardhat emit "network not found" after the approval has
+      # already been spent.
+      # -------------------------------------------------------------------
+      - name: Check the network is configured
+        env:
+          NETWORK: ${{ inputs.network }}
+        run: |
+          set -euo pipefail
+          if ! grep -q "${NETWORK}" contracts/hardhat.config.ts; then
+            echo "::error::Network '${NETWORK}' is not defined in contracts/hardhat.config.ts."
+            echo "::error::Add it (url from TESTNET_RPC_URL, accounts from TESTNET_DEPLOYER_PRIVATE_KEY) before dispatching this workflow."
+            exit 1
+          fi
+
+      - name: Simulate the deployment (dry run)
+        if: inputs.dry_run
+        env:
+          # A dry run needs an RPC endpoint to fork from, but never the key.
+          # Withholding the secret is cheaper than trusting a script not to
+          # broadcast.
+          TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+          HARDHAT_NETWORK: ${{ inputs.network }}
+        run: |
+          set -euo pipefail
+          echo "Dry run: compiling and simulating against ${HARDHAT_NETWORK}. No transaction will be broadcast."
+          npx --workspace contracts hardhat run scripts/deploy.ts --network "${HARDHAT_NETWORK}" --dry-run
+
+      - name: Deploy
+        id: deployed
+        if: ${{ !inputs.dry_run }}
+        env:
+          # These come from the `testnet` ENVIRONMENT, not from repository
+          # secrets. Until the required reviewer approves, GitHub does not
+          # hand them to this runner and these variables are empty.
+          #
+          # The key MUST be a dedicated testnet-only account holding only test
+          # ETH, and it MUST NOT be reused for mainnet or for any account that
+          # controls an upgrade path.
+          TESTNET_DEPLOYER_PRIVATE_KEY: ${{ secrets.TESTNET_DEPLOYER_PRIVATE_KEY }}
+          TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+          HARDHAT_NETWORK: ${{ inputs.network }}
+        run: |
+          set -euo pipefail
+          test -n "${TESTNET_DEPLOYER_PRIVATE_KEY:-}" || {
+            echo "::error::No deployer key. The environment secret was not injected -- was the deployment approved?"
+            exit 1
+          }
+          npx --workspace contracts hardhat run scripts/deploy.ts --network "${HARDHAT_NETWORK}"
+          # deploy.ts writes contracts/deployments/<network>.json. Read the
+          # address back from that file rather than scraping stdout.
+          address="$(jq -r '.AuctionHouse.address' "contracts/deployments/${HARDHAT_NETWORK}.json")"
+          echo "address=${address}" >> "${GITHUB_OUTPUT}"
+          echo "explorer_url=https://${HARDHAT_NETWORK}.etherscan.io/address/${address}" >> "${GITHUB_OUTPUT}"
+          echo "Deployed AuctionHouse to ${address} on ${HARDHAT_NETWORK}" >> "${GITHUB_STEP_SUMMARY}"
+
+      # -------------------------------------------------------------------
+      # Source verification.
+      #
+      # Etherscan V2 is a SINGLE API key that works across every supported
+      # chain, addressed by chain id -- there is no longer one key per
+      # explorer, and no separate basescan/arbiscan key to rotate. In
+      # hardhat.config.ts that is `etherscan: { apiKey: <one string> }` with
+      # the v2 endpoint; a per-network apiKey MAP is the V1 shape and is what
+      # produces the "Missing API key" error people hit after migrating.
+      # -------------------------------------------------------------------
+      - name: Verify on the block explorer
+        if: ${{ !inputs.dry_run && inputs.verify }}
+        env:
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+          HARDHAT_NETWORK: ${{ inputs.network }}
+          ADDRESS: ${{ steps.deployed.outputs.address }}
+        run: |
+          set -euo pipefail
+          test -n "${ETHERSCAN_API_KEY:-}" || {
+            echo "::error::ETHERSCAN_API_KEY is empty. Add it as a testnet environment secret."
+            exit 1
+          }
+          # Verification is retried once: the explorer routinely has not
+          # indexed the deployment transaction yet on the first attempt, and a
+          # verification failure should not look like a deployment failure.
+          npx --workspace contracts hardhat verify --network "${HARDHAT_NETWORK}" "${ADDRESS}" \
+            || npx --workspace contracts hardhat verify --network "${HARDHAT_NETWORK}" "${ADDRESS}"
+
+      - name: Record the deployment
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          # The deployment JSON is the only durable record of which address
+          # this run produced. The GitHub deployment record says WHO and WHEN;
+          # this says WHAT.
+          name: deployment-${{ inputs.network }}-${{ github.run_id }}
+          path: contracts/deployments/${{ inputs.network }}.json
+          if-no-files-found: error

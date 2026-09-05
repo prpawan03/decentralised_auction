@@ -1,0 +1,15 @@
+# Intentionally empty.
+#
+# Grafana scans /etc/grafana/provisioning/{datasources,dashboards,plugins,
+# alerting} at start-up and logs an ERROR for any that is missing. Because the
+# whole provisioning tree is bind-mounted read-only from the host, a directory
+# absent here is absent in the container -- which produced two error-level
+# lines on every boot:
+#
+#   level=error msg="Failed to read plugin provisioning files from directory"
+#
+# Nothing is broken by those lines, but an error in the log of a monitoring
+# stack is exactly the wrong thing to teach an operator to ignore. Keeping the
+# directory present and empty silences them. Git does not track empty
+# directories, hence this file; Grafana only reads *.yaml/*.yml, so it ignores
+# a dotfile.

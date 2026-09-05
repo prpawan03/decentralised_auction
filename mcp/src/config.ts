@@ -1,0 +1,362 @@
+/**
+ * Configuration and the STARTUP SAFETY GATES.
+ *
+ * Everything in this file runs before a single tool is exposed. The design rule
+ * is: make the dangerous thing IMPOSSIBLE, not discouraged. A prompt that says
+ * "only use this on a local chain" is a suggestion to a model; a process that
+ * refuses to finish booting unless `eth_chainId` returns 31337 is a property of
+ * the system. The MCP specification is explicit that tool annotations are
+ * untrusted hints, so none of the safety here is expressed as an annotation.
+ */
+
+import { readFileSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  isAddress,
+  parseEther,
+  type Address,
+  type PublicClient,
+  type WalletClient,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { detectAuctionLayout, type AuctionLayout } from "./auctions.js";
+import { defineChain } from "viem";
+
+/**
+ * The ONLY chain id this server will ever talk to.
+ *
+ * This is the single most important line in the package. Hardhat and Anvil both
+ * use 31337 for their in-memory dev chain, and no public network uses it. One
+ * equality check therefore makes the whole server categorically unable to touch
+ * mainnet, an L2, or a testnet holding real value -- regardless of what RPC URL
+ * someone puts in the environment, and regardless of what an agent is persuaded
+ * to ask for. It is a constant and NOT configurable on purpose: an env var here
+ * would reintroduce exactly the risk it removes.
+ */
+export const REQUIRED_CHAIN_ID = 31337 as const;
+
+/**
+ * Hardhat/Anvil account #1 -- NOT #0.
+ *
+ * WHY #1: account #0 is the deployer, and the deployer is the `Ownable2Step`
+ * owner of AuctionHouse. The owner can `pause()`, `unpause()`,
+ * `setPlatformFee()` and `setFeeRecipient()`. Handing an autonomous agent the
+ * owner key would mean a prompt-injected agent could pause the entire house or
+ * redirect the platform fee. Account #1 is a plain participant: it can bid, buy,
+ * settle and withdraw, and every owner-only call it could attempt would revert
+ * with `OwnableUnauthorizedAccount`. Combined with the ABI allowlist in abi.ts
+ * (which contains no owner-only fragment at all), the agent has no route to
+ * those functions even by accident.
+ *
+ * This key is from the universally published Hardhat test mnemonic
+ * ("test test ... junk"). It is worthless by construction, is already in
+ * .env.example for the deployer slot, and is safe to commit. It must never be
+ * funded on a real network -- and the chain-id gate guarantees this process
+ * would refuse to run there anyway.
+ */
+const HARDHAT_ACCOUNT_1_KEY =
+  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
+
+/** Hardhat/Anvil account #0. Recognised only so we can REFUSE it. */
+const HARDHAT_ACCOUNT_0_KEY =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+
+/** Thrown for a configuration problem that should stop the process cleanly. */
+export class StartupError extends Error {}
+
+/** Reads an env var, falling back to a default. Empty string counts as unset. */
+function env(name: string, fallback?: string): string | undefined {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") return fallback;
+  return value.trim();
+}
+
+/**
+ * The wei ceiling on any single value-bearing call.
+ *
+ * Enforced in the tool handler (index.ts), not merely documented. The default of
+ * 100 ETH is meaningless on a throwaway dev chain where every account starts
+ * with 10 000 ETH, which is the point: the cap's job is to bound the blast
+ * radius of a runaway loop or an injected instruction, so that a bad decision
+ * costs one bounded bid rather than the account's entire balance.
+ */
+function readMaxBidWei(): bigint {
+  const raw = env("AUCTION_MCP_MAX_BID_WEI");
+  if (raw === undefined) return parseEther("100");
+
+  let parsed: bigint;
+  try {
+    parsed = BigInt(raw);
+  } catch {
+    throw new StartupError(
+      `AUCTION_MCP_MAX_BID_WEI must be an integer number of wei, got: ${raw}`,
+    );
+  }
+  // A zero or negative cap would be a footgun: 0 silently disables all bidding
+  // while looking like "no limit". Reject it so the misconfiguration is loud.
+  if (parsed <= 0n) {
+    throw new StartupError(
+      `AUCTION_MCP_MAX_BID_WEI must be greater than zero, got: ${raw}`,
+    );
+  }
+  return parsed;
+}
+
+/** Deployment addresses, from contracts/deployments/31337.json or from env. */
+export interface Deployment {
+  auctionHouse: Address;
+  demoNft?: Address;
+  /**
+   * The block the contracts were deployed in. Used as the `fromBlock` floor for
+   * log queries so bid-history scans do not walk the chain from genesis.
+   */
+  blockNumber: bigint;
+}
+
+/**
+ * Locates the deployment record.
+ *
+ * The file is generated by the deploy step and is NOT in git (the deployments
+ * directory ships with only a .gitkeep), so a fresh clone will not have it. Env
+ * overrides therefore come FIRST and the file is the fallback -- the reverse of
+ * the obvious order, but it is what lets this server run against a chain that
+ * was deployed by some other process (a container, a teammate's box) without
+ * sharing a filesystem.
+ */
+function readDeployment(): Deployment {
+  const houseFromEnv = env("AUCTION_HOUSE_ADDRESS");
+  const nftFromEnv = env("DEMO_NFT_ADDRESS");
+
+  if (houseFromEnv !== undefined) {
+    if (!isAddress(houseFromEnv)) {
+      throw new StartupError(
+        `AUCTION_HOUSE_ADDRESS is not a valid address: ${houseFromEnv}`,
+      );
+    }
+    if (nftFromEnv !== undefined && !isAddress(nftFromEnv)) {
+      throw new StartupError(`DEMO_NFT_ADDRESS is not a valid address: ${nftFromEnv}`);
+    }
+    const fromBlock = env("AUCTION_MCP_FROM_BLOCK", "0")!;
+    return {
+      auctionHouse: houseFromEnv as Address,
+      demoNft: nftFromEnv as Address | undefined,
+      blockNumber: BigInt(fromBlock),
+    };
+  }
+
+  // Default path: ../contracts/deployments/31337.json relative to this file's
+  // package root. Resolved from import.meta.url rather than process.cwd()
+  // because an MCP client launches the server from an arbitrary directory --
+  // usually the user's project root, not this package.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const defaultPath = resolve(here, "..", "..", "contracts", "deployments", "31337.json");
+  const path = env("AUCTION_MCP_DEPLOYMENT", defaultPath)!;
+
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    throw new StartupError(
+      [
+        `Could not read the deployment record at:`,
+        `  ${path}`,
+        ``,
+        `The auction contracts do not appear to be deployed yet. Either:`,
+        `  - deploy them (from the repo root: \`make dev\`, or \`npm run deploy\` in contracts/), or`,
+        `  - point this server at an existing deployment with AUCTION_HOUSE_ADDRESS=0x...`,
+        `    (optionally DEMO_NFT_ADDRESS=0x... and AUCTION_MCP_FROM_BLOCK=<block>), or`,
+        `  - set AUCTION_MCP_DEPLOYMENT=/path/to/31337.json`,
+      ].join("\n"),
+    );
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new StartupError(`The deployment record at ${path} is not valid JSON.`);
+  }
+
+  const auctionHouse = parsed.auctionHouse;
+  if (typeof auctionHouse !== "string" || !isAddress(auctionHouse)) {
+    throw new StartupError(
+      `The deployment record at ${path} has no valid "auctionHouse" address.`,
+    );
+  }
+
+  // The record also carries a chainId. Check it early so an obviously wrong file
+  // is rejected before we open a socket -- the authoritative check is still the
+  // live eth_chainId call in assertLocalChain().
+  const declaredChainId = parsed.chainId;
+  if (typeof declaredChainId === "number" && declaredChainId !== REQUIRED_CHAIN_ID) {
+    throw new StartupError(
+      `The deployment record at ${path} declares chainId ${declaredChainId}. ` +
+        `This server only operates on chain ${REQUIRED_CHAIN_ID}.`,
+    );
+  }
+
+  const demoNft = parsed.demoNft;
+  const blockNumber = parsed.blockNumber;
+
+  return {
+    auctionHouse: auctionHouse as Address,
+    demoNft: typeof demoNft === "string" && isAddress(demoNft) ? (demoNft as Address) : undefined,
+    blockNumber:
+      typeof blockNumber === "number" || typeof blockNumber === "string"
+        ? BigInt(blockNumber)
+        : 0n,
+  };
+}
+
+/** The local dev chain. Declared inline so viem has fee/block defaults to use. */
+export const localChain = defineChain({
+  id: REQUIRED_CHAIN_ID,
+  name: "Auction House Local",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: { default: { http: ["http://127.0.0.1:8545"] } },
+});
+
+export interface ServerConfig {
+  rpcUrl: string;
+  indexerUrl: string;
+  maxBidWei: bigint;
+  deployment: Deployment;
+  publicClient: PublicClient;
+  walletClient: WalletClient;
+  account: ReturnType<typeof privateKeyToAccount>;
+  /**
+   * Which Auction struct layout the deployed contract uses. Filled in by
+   * assertLocalChain, which is the first thing that touches the network, so it
+   * is always set before any tool can run. See auctions.ts.
+   */
+  layout: AuctionLayout;
+}
+
+/**
+ * Builds the configuration and the viem clients.
+ *
+ * Does NOT touch the network -- that is `assertLocalChain`, kept separate so the
+ * ordering is explicit at the call site in index.ts: build, then verify, then
+ * serve. Nothing is registered as a tool until the verification has passed.
+ */
+export function loadConfig(): ServerConfig {
+  const rpcUrl = env("AUCTION_MCP_RPC_URL", env("RPC_URL", "http://127.0.0.1:8545"))!;
+  const indexerUrl = env("AUCTION_MCP_INDEXER_URL", "http://127.0.0.1:5173")!;
+
+  const rawKey = env("AUCTION_MCP_PRIVATE_KEY", HARDHAT_ACCOUNT_1_KEY)!;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(rawKey)) {
+    throw new StartupError(
+      "AUCTION_MCP_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string.",
+    );
+  }
+
+  // Refuse the deployer key even if someone sets it explicitly. The whole point
+  // of defaulting to account #1 is that the agent cannot reach owner-only
+  // functions; silently honouring an override of the owner key would undo that
+  // in one environment variable. Someone who genuinely wants owner powers should
+  // use a normal wallet, not an autonomous agent's tool server.
+  if (rawKey.toLowerCase() === HARDHAT_ACCOUNT_0_KEY) {
+    throw new StartupError(
+      [
+        "AUCTION_MCP_PRIVATE_KEY is set to the Hardhat deployer account (#0), which owns",
+        "the AuctionHouse contract. This server refuses to hold the owner key: an agent",
+        "with it could pause the house or redirect the platform fee.",
+        "",
+        "Use a non-owner account (the default is Hardhat account #1) instead.",
+      ].join("\n"),
+    );
+  }
+
+  const account = privateKeyToAccount(rawKey as `0x${string}`);
+  const transport = http(rpcUrl);
+
+  const publicClient = createPublicClient({ chain: localChain, transport });
+  const walletClient = createWalletClient({ account, chain: localChain, transport });
+
+  return {
+    rpcUrl,
+    indexerUrl,
+    maxBidWei: readMaxBidWei(),
+    deployment: readDeployment(),
+    publicClient: publicClient as PublicClient,
+    walletClient,
+    account,
+    // Provisional. assertLocalChain replaces this with the detected layout
+    // before the server is allowed to serve anything.
+    layout: { hasFormat: false, fieldCount: 13 },
+  };
+}
+
+/**
+ * THE GATE. Verifies over the wire that the connected node really is chain
+ * 31337, and that the auction house address actually has code on it.
+ *
+ * Throws `StartupError` on any mismatch; index.ts turns that into a message on
+ * stderr and a non-zero exit. It must never be downgraded to a warning: a server
+ * that starts anyway and refuses at call time is one forgotten `if` away from
+ * signing a transaction on a real network.
+ */
+export async function assertLocalChain(config: ServerConfig): Promise<void> {
+  /* eslint-disable-next-line no-param-reassign -- the layout field is filled in here by design. */
+  let chainId: number;
+  try {
+    chainId = await config.publicClient.getChainId();
+  } catch (cause) {
+    throw new StartupError(
+      [
+        `Could not reach a JSON-RPC node at ${config.rpcUrl}.`,
+        `  ${cause instanceof Error ? cause.message : String(cause)}`,
+        "",
+        "Start the local chain first (from the repo root: `make dev`), or set",
+        "AUCTION_MCP_RPC_URL to the right endpoint.",
+      ].join("\n"),
+    );
+  }
+
+  if (chainId !== REQUIRED_CHAIN_ID) {
+    throw new StartupError(
+      [
+        `REFUSING TO START: connected chain id is ${chainId}, not ${REQUIRED_CHAIN_ID}.`,
+        "",
+        `This MCP server signs transactions autonomously on behalf of an AI agent and is`,
+        `hard-limited to the local development chain (${REQUIRED_CHAIN_ID}). It will not run`,
+        `against any other network, including testnets. This limit is not configurable.`,
+        "",
+        `RPC endpoint: ${config.rpcUrl}`,
+      ].join("\n"),
+    );
+  }
+
+  // A correct chain id with no contract at the address means a stale deployment
+  // record -- typically the chain was restarted without redeploying. Caught here
+  // because otherwise every read returns "0x" and decodes into nonsense.
+  const code = await config.publicClient.getCode({ address: config.deployment.auctionHouse });
+  if (code === undefined || code === "0x") {
+    throw new StartupError(
+      [
+        `No contract code at ${config.deployment.auctionHouse} on chain ${REQUIRED_CHAIN_ID}.`,
+        "",
+        "The deployment record is stale -- this usually means the local chain was restarted",
+        "without redeploying. Redeploy the contracts (from the repo root: `make dev`).",
+      ].join("\n"),
+    );
+  }
+
+  // The Auction struct layout is probed here, after the chain and the contract
+  // are known good, because it is the last remaining thing that can make every
+  // read tool fail. Detecting it at startup turns a mismatch into a clear boot
+  // error instead of an inscrutable decode exception on the agent's first
+  // list_auctions call. See auctions.ts for why the layout varies at all.
+  try {
+    config.layout = await detectAuctionLayout(
+      config.publicClient,
+      config.deployment.auctionHouse,
+    );
+  } catch (cause) {
+    throw new StartupError(cause instanceof Error ? cause.message : String(cause));
+  }
+}

@@ -1,0 +1,242 @@
+# ---------------------------------------------------------------------------
+# Indexer overlay.
+#
+# This file is an OVERLAY, not a stack. It has no top-level `name`, so it
+# inherits the project name from compose.yaml and merges into it:
+#
+#   docker compose -f compose.yaml -f compose.indexer.yaml --profile indexer up
+#
+# It adds two services and changes one setting on an existing one:
+#
+#   indexer-db   Postgres 17. Ponder's store.
+#   indexer      Ponder. Serves /graphql, /sql/*, /health, /ready, /status,
+#                /metrics and the REST routes in indexer/src/api/index.ts.
+#   chain        BLOCK_TIME is raised to 2. See the note on that service below;
+#                this is not cosmetic.
+#
+# Both new services sit behind the `indexer` profile, so the base stack starts
+# unchanged for anyone who does not want them. Nothing is published to the
+# host: nginx proxies the indexer, and the database is reachable only from the
+# `auction` network.
+#
+# Requires Docker Compose v2.24 or later, the same as the base file.
+# ---------------------------------------------------------------------------
+
+# --- Shared fragments ------------------------------------------------------
+#
+# These repeat the fragments in compose.yaml. An anchor is file-scoped in
+# Compose -- YAML anchors are resolved per document, before the merge -- so
+# `*service-defaults` from the base file is NOT visible here and cannot be
+# referenced. Duplicating them is the only way to get the same hardening onto
+# a service that an overlay adds. If the base file's fragments change, change
+# these with them.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-service-defaults: &service-defaults
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging: *logging
+
+services:
+  # -------------------------------------------------------------------------
+  # chain: one setting changed.
+  # -------------------------------------------------------------------------
+  chain:
+    environment:
+      # BLOCK_TIME MUST NOT be 0 while the indexer is running.
+      #
+      # BLOCK_TIME=0 is Hardhat's automatic mining: a block is produced only
+      # when a transaction arrives. Ponder's realtime sync polls for new
+      # blocks, and with automine an idle chain produces none at all, so the
+      # head never moves, `/ready` never flips to 200, and the last block
+      # containing events is never confirmed as finalised. The symptom is an
+      # indexer that looks stuck: it reports healthy, has the data, and will
+      # not admit to being caught up. Nothing is broken -- there is genuinely
+      # no new block to see.
+      #
+      # Interval mining fixes it by producing an empty block every BLOCK_TIME
+      # seconds whether or not anything happened. 2 seconds is enough for the
+      # head to move visibly without filling the log.
+      #
+      # This also improves the chain's own health probe: docker/chain/
+      # healthcheck.js can only assert that the block height is ADVANCING when
+      # BLOCK_TIME > 0. Under automine it degrades to a liveness check.
+      BLOCK_TIME: ${BLOCK_TIME:-2}
+
+  # -------------------------------------------------------------------------
+  # deployer: one mount added.
+  #
+  # The deployer already writes contracts/deployments/31337.json inside its own
+  # container and then exits. The indexer needs that file -- it is where the
+  # contract addresses and the start block come from -- so the directory is
+  # promoted to a named volume that both containers see.
+  #
+  # The alternative, passing AUCTION_HOUSE_ADDRESS and DEMO_NFT_ADDRESS as
+  # environment variables, is supported by indexer/deployment.ts and it is
+  # strictly worse as the default: it drops the start block, so the indexer
+  # would rescan from genesis, and it silently keeps a stale address when the
+  # chain is reset and the contracts land somewhere else.
+  # -------------------------------------------------------------------------
+  deployer:
+    volumes:
+      - deployments:/app/contracts/deployments
+
+  # -------------------------------------------------------------------------
+  # indexer-db: Ponder's Postgres store.
+  #
+  # A separate database from anything else in the stack, on its own volume,
+  # because Ponder owns its schema completely: it creates, drops and swaps
+  # schemas between deployments, and it is not safe to point at a database
+  # holding anything it did not write.
+  # -------------------------------------------------------------------------
+  indexer-db:
+    <<: *service-defaults
+    image: postgres:17-alpine
+    container_name: auction-indexer-db
+    profiles: [indexer]
+    restart: unless-stopped
+    networks:
+      - auction
+    environment:
+      POSTGRES_USER: ${INDEXER_DB_USER:-ponder}
+      # SECURITY: this password is a local-development credential and the port
+      # is NOT published to the host, so the database is reachable only from
+      # the `auction` bridge network. Set INDEXER_DB_PASSWORD in .env before
+      # this stack goes anywhere that is not a laptop.
+      POSTGRES_PASSWORD: ${INDEXER_DB_PASSWORD:-ponder}
+      POSTGRES_DB: ${INDEXER_DB_NAME:-ponder}
+      # Postgres re-checksums on every start without this; the demo data is
+      # small, and the flag mainly keeps the initdb log quiet.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - indexer-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` alone answers before initdb has finished creating the
+      # database, so the database name is passed explicitly: the probe then
+      # fails until the database the indexer will actually connect to exists.
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${INDEXER_DB_USER:-ponder} -d ${INDEXER_DB_NAME:-ponder} -q
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    # Postgres writes its data directory, a socket under /var/run and temp
+    # files. The data directory is a volume; the other two need a writable
+    # file system, so `read_only` stays off here.
+    stop_grace_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+        reservations:
+          memory: 128m
+
+  # -------------------------------------------------------------------------
+  # indexer: Ponder.
+  # -------------------------------------------------------------------------
+  indexer:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/indexer.Dockerfile
+      target: runtime
+      args:
+        NODE_VERSION: 24-alpine
+    image: auction/indexer:local
+    container_name: auction-indexer
+    profiles: [indexer]
+    restart: unless-stopped
+    networks:
+      - auction
+    depends_on:
+      # Both gates are required and they guard different things.
+      #
+      # The deployer gate is the one that matters: ponder.config.ts imports
+      # contracts/deployments/31337.json at start-up, and without it the
+      # process exits immediately with the error in indexer/deployment.ts.
+      # `service_completed_successfully` means the record exists AND the
+      # deployment succeeded.
+      deployer:
+        condition: service_completed_successfully
+      indexer-db:
+        condition: service_healthy
+    environment:
+      # Ponder derives this variable name from the CHAIN ID, not from the chain
+      # name in ponder.config.ts. `chain` resolves on the auction network, so
+      # this is a container address and not the 127.0.0.1 the browser uses.
+      PONDER_RPC_URL_31337: ${INDEXER_RPC_URL:-http://chain:8545}
+      DATABASE_URL: postgres://${INDEXER_DB_USER:-ponder}:${INDEXER_DB_PASSWORD:-ponder}@indexer-db:5432/${INDEXER_DB_NAME:-ponder}
+      # Ponder namespaces its tables in this schema and swaps schemas between
+      # deployments. Pinning it keeps `/sql/*` and any hand-written query
+      # pointed at a stable name.
+      DATABASE_SCHEMA: ${INDEXER_DB_SCHEMA:-public}
+      PONDER_LOG_LEVEL: ${PONDER_LOG_LEVEL:-info}
+      PONDER_PORT: "42069"
+      # Optional pins. Empty means "read them from the deployment record",
+      # which is what the volume below is for.
+      AUCTION_HOUSE_ADDRESS: ${AUCTION_HOUSE_ADDRESS:-}
+      DEMO_NFT_ADDRESS: ${DEMO_NFT_ADDRESS:-}
+    volumes:
+      # Read-only: this container consumes the deployment record, it never
+      # writes one. The deployer is the single writer.
+      - deployments:/opt/auction/contracts/deployments:ro
+    expose:
+      # NOT `ports`. The indexer is reached through the nginx proxy in front of
+      # the web service, so publishing 42069 to the host would be a second,
+      # unproxied way in that nothing needs. Add a `ports` entry in a local
+      # override if you want to point GraphiQL straight at it.
+      - "42069"
+    healthcheck:
+      # The probe hits /ready, not /health, so the container is only healthy
+      # once the backfill has caught up to the chain head. See the note at the
+      # top of indexer/healthcheck.js.
+      test: ["CMD", "node", "/opt/auction/indexer/healthcheck.js"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # A cold start re-indexes from the deployment block every time, because
+      # the local chain resets and `disableCache: true` is therefore set. This
+      # window is that backfill, not a fault.
+      start_period: 90s
+    read_only: true
+    tmpfs:
+      # Ponder writes its build cache and its scratch space under `.ponder`.
+      # It does NOT write a PGlite store there in this stack, because
+      # DATABASE_URL points at Postgres, so 64m is ample.
+      #
+      # If the indexer fails to start with a read-only file system, set
+      # `read_only: false` here and report the path that failed.
+      - /tmp:mode=1777,size=64m
+      - /home/node:mode=1777,size=32m
+      - /opt/auction/indexer/.ponder:mode=1777,size=64m
+    stop_grace_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+        reservations:
+          memory: 256m
+
+volumes:
+  # The deployment record, written by the deployer and read by the indexer.
+  #
+  # It is intentionally NOT `external`. `docker compose down --volumes` should
+  # remove it along with the chain state it describes: a deployment record that
+  # outlives its chain points at addresses that no longer hold any code, and an
+  # indexer pointed at those addresses reports healthy and indexes nothing.
+  deployments:
+    name: auction-deployments
+
+  indexer-db-data:
+    name: auction-indexer-db-data

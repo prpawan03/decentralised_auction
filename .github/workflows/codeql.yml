@@ -6,6 +6,10 @@
 #
 # CodeQL has no Solidity analyser. Slither covers the Solidity code, and it
 # runs in ci.yml.
+#
+# Every action below is pinned to a commit SHA. The reasoning, and the command
+# that regenerates a pin, are documented once in ci.yml under "ACTION PINNING
+# POLICY", and enforced by scripts/check-action-pins.mjs.
 # ---------------------------------------------------------------------------
 
 name: CodeQL
@@ -45,22 +49,22 @@ jobs:
             build-mode: none
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
           cache: npm
 
       - name: Initialise CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-and-quality
 
       - name: Analyse
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
           category: /language:${{ matrix.language }}

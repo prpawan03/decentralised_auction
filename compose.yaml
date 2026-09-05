@@ -72,8 +72,22 @@ services:
       # network. Do not remove the 127.0.0.1 prefix.
       - "127.0.0.1:${RPC_PORT:-8545}:8545"
     healthcheck:
-      # The node:alpine image contains no curl. This probe sends
-      # `eth_blockNumber` and it checks the answer.
+      # The node:alpine image contains no curl, so the probe is a script.
+      #
+      # It asks two questions: does the node answer JSON-RPC, and is the block
+      # height still ADVANCING. The second question is only meaningful under
+      # interval mining (BLOCK_TIME > 0), because an idle node under automatic
+      # mining correctly produces no blocks at all. The script reads BLOCK_TIME
+      # from the environment above and decides for itself; see the comment at
+      # the top of docker/chain/healthcheck.js.
+      #
+      # NOTE: with BLOCK_TIME=0 -- the default of compose.prod.yaml -- this
+      # probe can only prove the node ANSWERS, not that it still works. A
+      # wedged mining loop is undetectable in that mode. Set BLOCK_TIME to 1 or
+      # more when a stalled chain must be caught.
+      #
+      # The probe keeps one small state file under /tmp, which is a tmpfs
+      # declared below, so it is empty again after a restart.
       test: ["CMD", "node", "/opt/chain/healthcheck.js"]
       interval: 5s
       timeout: 5s

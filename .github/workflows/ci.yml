@@ -2,6 +2,7 @@
 # Continuous integration.
 #
 # Jobs:
+#   supply-chain  Every action is pinned to a commit SHA. See the policy below.
 #   contracts  Lint, build, test, coverage floor, ABI freshness.
 #   web        Lint, type check, unit test, build, bundle size ceiling.
 #   slither    Static analysis of the Solidity code. The result goes to the
@@ -12,6 +13,34 @@
 # A job MUST fail the pipeline when its gate fails. No gate uses
 # `continue-on-error`, except the SARIF upload, which needs a permission that
 # a fork does not have.
+#
+# ---------------------------------------------------------------------------
+# ACTION PINNING POLICY
+#
+# Every third-party action is pinned to a full 40-character commit SHA, with
+# the human-readable version in a trailing comment. A tag is a MOVING pointer:
+# the tag owner can repoint it at any commit, and `uses: someone/action@v4`
+# then silently runs new code inside a job that holds this repository's
+# secrets.
+#
+# This is not hypothetical. Between 2026-03-19 and 2026-03-23 an attacker
+# force-pushed malicious commits over 76 of the 77 version tags of
+# `aquasecurity/trivy-action` -- the action this file uses below -- and over
+# every tag of `aquasecurity/setup-trivy`. The payload harvested SSH keys,
+# cloud credentials and Kubernetes secrets from the runner.
+# See CVE-2026-33634 / GHSA-69fq-xp46-6x23.
+#
+# A commit SHA cannot be repointed, so a pinned workflow is unaffected by a
+# tag force-push. Treat unpinning as a security regression, not a style
+# change. `scripts/check-action-pins.mjs` enforces this, and the
+# `supply-chain` job below runs it.
+#
+# HOW TO UPDATE A PIN
+#   git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>^{}'
+#   # Annotated tags need the ^{} dereference to reach the COMMIT. If that
+#   # prints nothing the tag is lightweight, so drop the ^{}.
+# Replace the SHA and the trailing version comment TOGETHER. A stale comment
+# is worse than none.
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -40,16 +69,41 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
+  # supply-chain: the pinning policy above, enforced.
+  #
+  # This job holds no secrets and installs nothing, so it is the cheapest gate
+  # in the file. An unpinned action is a finding about THIS pipeline, and it
+  # stays visible even when a build job fails for an unrelated reason.
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # The script uses only Node built-ins, so there is deliberately no
+      # `npm ci` here. A supply-chain gate that first installs the dependency
+      # tree it exists to protect would defeat its own purpose.
+      - name: Check that every action is pinned to a commit SHA
+        run: node scripts/check-action-pins.mjs
+
+  # -------------------------------------------------------------------------
   contracts:
     name: Contracts
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -97,7 +151,7 @@ jobs:
 
       - name: Upload the coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: contracts-coverage
           path: contracts/coverage/
@@ -111,10 +165,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -147,7 +201,7 @@ jobs:
 
       - name: Upload the bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: web-dist
           path: web/dist/
@@ -164,10 +218,10 @@ jobs:
       security-events: write
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -177,7 +231,7 @@ jobs:
 
       - name: Run Slither
         id: slither
-        uses: crytic/slither-action@v0.4.1
+        uses: crytic/slither-action@4fd765aeef19915d04ddf0be90c2930036a774d8 # v0.4.1
         continue-on-error: true
         with:
           target: contracts/
@@ -186,7 +240,7 @@ jobs:
           fail-on: none
 
       - name: Send the result to the security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         # A pull request from a fork has no write access to the security tab.
         # The analysis still ran, so a missing upload MUST NOT fail the build.
         continue-on-error: true
@@ -217,13 +271,13 @@ jobs:
             target: prod
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build the ${{ matrix.name }} image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -236,8 +290,19 @@ jobs:
           cache-to: type=gha,scope=${{ matrix.name }},mode=max
           provenance: false
 
+      # SECURITY: this action MUST stay at v0.35.0 or later. The previous pin
+      # here was `@0.28.0`, a tag inside the range rewritten by the 2026-03
+      # supply-chain attack (CVE-2026-33634). check-action-pins.mjs enforces
+      # the floor so it cannot silently regress.
       - name: Scan the ${{ matrix.name }} image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          # Trivy pulls its database from GHCR, which rate-limits anonymous
+          # pulls. GITHUB_TOKEN does NOT lift that limit, because the database
+          # lives outside this repository's namespace. A mirror keeps a red
+          # build from meaning nothing about this code.
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db
         with:
           image-ref: auction/${{ matrix.name }}:ci
           format: sarif
@@ -247,7 +312,7 @@ jobs:
           exit-code: "0"
 
       - name: Send the scan to the security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         continue-on-error: true
         with:
           sarif_file: trivy-${{ matrix.name }}.sarif
@@ -256,7 +321,14 @@ jobs:
       # A CRITICAL problem with a known fix MUST fail the build. The scan
       # above only reports; this step decides.
       - name: Fail on a fixable CRITICAL problem
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db
+          # The scan above already put the database in the runner cache. Skip
+          # the second download so one flaky registry call cannot fail the gate.
+          TRIVY_SKIP_DB_UPDATE: "true"
+          TRIVY_SKIP_JAVA_DB_UPDATE: "true"
         with:
           image-ref: auction/${{ matrix.name }}:ci
           format: table
@@ -272,10 +344,10 @@ jobs:
     needs: [contracts, web]
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -318,7 +390,7 @@ jobs:
     name: CI passed
     runs-on: ubuntu-latest
     if: always()
-    needs: [contracts, web, slither, docker, smoke]
+    needs: [supply-chain, contracts, web, slither, docker, smoke]
     steps:
       - name: Check that every job succeeded
         run: |

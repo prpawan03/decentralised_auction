@@ -258,6 +258,15 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
      * @param buyNowPrice The buy-now price. 0 means buy-now is disabled.
      * @param startTime The Unix time the auction opened.
      * @param endTime The Unix time bidding closes.
+     * @param format Which rules discover the price. See {Format}.
+     *
+     *        This is emitted, and not left to be read back with {getAuction},
+     *        because a log is the only thing an indexer sees. Without it,
+     *        telling an English listing from a Dutch one would cost one
+     *        contract call PER AUCTION -- which is exactly the round trip an
+     *        index exists to remove. It also disambiguates {BidPlaced}: the
+     *        same event carries an English bid and a Dutch purchase, and the
+     *        format is what tells a reader which one it is holding.
      */
     event AuctionCreated(
         uint256 indexed auctionId,
@@ -267,7 +276,8 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
         uint96 reservePrice,
         uint96 buyNowPrice,
         uint64 startTime,
-        uint64 endTime
+        uint64 endTime,
+        Format format
     );
     /**
      * @notice A new leading bid was accepted.
@@ -277,6 +287,15 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
      * @param previousBidder The account that was just outbid, or `address(0)`.
      * @param previousAmount The bid that was just beaten.
      * @param endTime The `endTime` after any anti-snipe extension.
+     * @param extended True when THIS bid moved the clock, i.e. it landed inside
+     *        {ANTI_SNIPE_WINDOW} and an extension was still available.
+     *
+     *        A reader can already infer this by correlating {AuctionExtended}
+     *        with the surrounding {BidPlaced} by log index. Emitting it makes
+     *        the answer exact rather than reconstructed, which turns "what
+     *        share of bids were snipes" from a heuristic over two event
+     *        streams into a count over one. The flag is false for a buy-now
+     *        purchase and for a Dutch sale: neither has a clock to move.
      */
     event BidPlaced(
         uint256 indexed auctionId,
@@ -284,7 +303,8 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
         uint96 amount,
         address previousBidder,
         uint96 previousAmount,
-        uint64 endTime
+        uint64 endTime,
+        bool extended
     );
     /**
      * @notice A late bid pushed `endTime` out by {ANTI_SNIPE_WINDOW}.
@@ -760,7 +780,17 @@ abstract contract AuctionCore is ERC721Holder, ReentrancyGuard, Pausable, Ownabl
             })
         );
 
-        emit AuctionCreated(auctionId, msg.sender, nft, tokenId, reservePrice, buyNowPrice, startTime, endTime);
+        emit AuctionCreated(
+            auctionId,
+            msg.sender,
+            nft,
+            tokenId,
+            reservePrice,
+            buyNowPrice,
+            startTime,
+            endTime,
+            format
+        );
 
         // Interaction last. State is already final when the token moves.
         IERC721(nft).safeTransferFrom(msg.sender, address(this), tokenId);
