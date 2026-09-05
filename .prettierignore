@@ -1,0 +1,15 @@
+# Generated or vendored. Formatting these creates churn against their generators.
+node_modules
+package-lock.json
+web/src/abi/
+web/src/deployments/
+web/dist/
+contracts/artifacts/
+contracts/cache/
+contracts/coverage/
+contracts/legacy/
+contracts/src/vendor/
+contracts/deployments/
+coverage/
+docs/audit/
+*.min.*

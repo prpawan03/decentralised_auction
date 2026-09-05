@@ -1,0 +1,153 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+/* ---------------------------------------------------------------------------
+ * Base layer. Everything here is either a WCAG requirement or a decision the
+ * whole app depends on. Component look-and-feel lives in the components.
+ * ------------------------------------------------------------------------- */
+
+@layer base {
+  html {
+    /* SC 2.4.7 / 2.4.11: an anchor jump must not land under the sticky header */
+    scroll-padding-top: calc(var(--spacing-header) + 1rem);
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html.theme-light {
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    /* Optical: the palette is low-chroma, so stop the OS from over-thinning it */
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Digits align in columns everywhere in this app: prices, bids, countdowns. */
+  code,
+  kbd,
+  samp,
+  pre,
+  .tnum {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* SC 2.4.7 Focus Visible + 2.4.13 Focus Appearance. One ring, everywhere,
+     drawn with outline so it is never clipped by overflow: hidden. */
+  :focus-visible {
+    outline: 2px solid var(--color-action);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  /* Kill the UA ring only where we have already drawn our own. */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Anything targeted by a fragment link clears the sticky header. */
+  [id] {
+    scroll-margin-top: calc(var(--spacing-header) + 1rem);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+
+  /* Native controls inherit the theme instead of the OS. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* SC 1.4.12 Text Spacing — nothing may clip when a user stylesheet grows it. */
+  p,
+  li {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background-color: var(--color-action);
+    color: var(--color-on-action);
+  }
+
+  /* SC 2.3.3 Animation from Interactions. Neutralise EVERYTHING: transitions,
+     animations, smooth scrolling, and the countdown pulse. */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto !important;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      animation-delay: 0ms !important;
+      transition-duration: 0.001ms !important;
+      transition-delay: 0ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Utilities the design leans on repeatedly.
+ * ------------------------------------------------------------------------- */
+
+@utility panel {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+
+@utility hairline {
+  border-color: var(--color-line);
+}
+
+/* A 2px state stripe down the left edge of a row. State is encoded in FORM
+   (position + presence) as well as colour, per SC 1.4.1 Use of Color. */
+@utility stripe {
+  position: relative;
+}
+
+/* Column heads in the dense tables. */
+@utility col-head {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+/* SC 2.5.8 Target Size (Minimum) — 24x24 CSS px floor on every hit area. */
+@utility tap {
+  min-inline-size: 1.5rem;
+  min-block-size: 1.5rem;
+}
+
+/* The countdown ticks; the pulse must not (SC 2.2.2 Pause, Stop, Hide). It is
+   a single 1s step, not a continuous loop, and reduced-motion removes it. */
+@keyframes tick-flash {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# Prometheus configuration for the auction monitoring profile.
+#
+# Mounted read-only at /etc/prometheus/prometheus.yml. Everything here targets
+# service names on the `auction` Compose bridge network, so nothing resolves
+# from the host -- that is intentional. Prometheus is published on
+# 127.0.0.1:9090 for a human to poke at; it is not reachable off the machine.
+# ---------------------------------------------------------------------------
+
+global:
+  # 5 seconds, not the 15s default.
+  #
+  # WHY: this stack exists to be demonstrated. Somebody clicks "bid" and then
+  # looks at the dashboard. At 15s they watch a flat line for a quarter of a
+  # minute and conclude the monitoring is broken. At 5s the escrow gauge moves
+  # within one scrape of the click. The cost is negligible -- one exporter and
+  # one indexer producing a few dozen series -- and the exporter polls the
+  # chain on the same 5s cadence, so the two stay in step and a bid is never
+  # more than two intervals from appearing.
+  scrape_interval: 5s
+
+  # Must stay below scrape_interval so a slow target cannot overlap its own
+  # next scrape. The exporter serves cached values and answers in microseconds,
+  # so this is pure headroom.
+  scrape_timeout: 4s
+
+  # Rule evaluation has nothing to evaluate yet (no rule_files below), but
+  # setting it now means adding an alert file later does not silently inherit
+  # the 1m default and lag the dashboard it is meant to match.
+  evaluation_interval: 5s
+
+  external_labels:
+    stack: auction
+    env: local
+
+scrape_configs:
+  # -------------------------------------------------------------------------
+  # The custom chain exporter.
+  #
+  # This is the job that matters. It carries block height, RPC health and the
+  # AuctionHouse contract state -- see docker/exporter/src/collector.mjs for
+  # why an off-the-shelf exporter could not do this (JSON-RPC hex quantities
+  # defeat json_exporter's float parser).
+  # -------------------------------------------------------------------------
+  - job_name: chain-exporter
+    static_configs:
+      - targets: ["chain-exporter:9101"]
+        labels:
+          component: chain
+    metrics_path: /metrics
+
+  # -------------------------------------------------------------------------
+  # The Ponder indexer.
+  #
+  # EXPECT THIS TARGET TO BE DOWN. The indexer lives behind its own Compose
+  # profile, and the monitoring profile is designed to run without it. A red
+  # target on /targets when the indexer profile is off is the correct, healthy
+  # state -- not a misconfiguration to go fixing.
+  #
+  # Prometheus keeps retrying a failing target for the lifetime of the process,
+  # so the job needs no removal and no reload: start the indexer profile later
+  # and this turns green within one scrape interval on its own.
+  # -------------------------------------------------------------------------
+  - job_name: indexer
+    static_configs:
+      - targets: ["indexer:42069"]
+        labels:
+          component: indexer
+    metrics_path: /metrics
+
+  # -------------------------------------------------------------------------
+  # Prometheus scraping itself. Cheap, and it is the only way to tell "the
+  # exporter stopped reporting" from "Prometheus stopped scraping".
+  # -------------------------------------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          component: monitoring

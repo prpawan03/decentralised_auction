@@ -1,0 +1,21 @@
+# Tool configuration only. This repository has no Python package; the
+# formatter sections exist so the pre-commit hooks have a config to read the
+# day a Python script is added.
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver"
+version = "1.0.0"
+update_changelog_on_bump = true

@@ -1,0 +1,32 @@
+# gitleaks configuration.
+#
+# The repository deliberately contains the Hardhat development mnemonic and
+# the private key of its first account. They are published in Hardhat's own
+# documentation, are used by every Ethereum development tool, and fund
+# nothing outside a local node. SECURITY.md explains this. Anything else that
+# looks like a key MUST still be reported.
+
+title = "Smart Auction Network"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public Hardhat test accounts, and generated files"
+paths = [
+  '''package-lock\.json''',
+  '''web/src/abi/.*\.ts''',
+  '''contracts/src/vendor/.*''',
+  '''contracts/legacy/.*''',
+  # detect-secrets stores hashes of reviewed findings here; they are not secrets.
+  '''\.secrets\.baseline''',
+  # Build output is never committed; vendor bundles carry public client keys.
+  '''web/dist/.*''',
+]
+regexes = [
+  # Accounts 0 and 1 of "test test ... junk". Public by design: the deployer
+  # uses account 0, the MCP server signs with account 1 and refuses account 0.
+  '''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
+  '''0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d''',
+  '''test test test test test test test test test test test junk''',
+]

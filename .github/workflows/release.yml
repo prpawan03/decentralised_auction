@@ -1,0 +1,498 @@
+# ---------------------------------------------------------------------------
+# Release.
+#
+# This repository ships DOCKER IMAGES, not npm packages. That single fact
+# drives every choice below.
+#
+# THE PIPELINE
+#   release-please   Reads Conventional Commits since the last tag, opens or
+#                    updates a "chore(main): release x.y.z" PR. Merging that
+#                    PR is the release. The action then tags and creates the
+#                    GitHub Release, and sets releases_created=true on the
+#                    run that observes the merge.
+#   build            One job per (image x architecture). Builds on a NATIVE
+#                    runner and pushes BY DIGEST only -- no tags yet.
+#   merge            Joins the per-arch digests into one multi-arch manifest
+#                    list, applies the tags and annotations, signs the index
+#                    by digest with cosign, and attests build provenance.
+#   release-assets   Extracts the SBOM out of the pushed index and attaches it
+#                    to the GitHub Release.
+#
+# WHY release-please AND NOT semantic-release
+# semantic-release's value is its publish plugins (npm, PyPI, ...). We publish
+# to a container registry from a build job that must run on two architectures,
+# so there is nothing for those plugins to do. release-please has NO publish
+# step by design: it only manages version, changelog, tag and Release. That
+# leaves the artefact story entirely to buildx, which is where it belongs.
+# It is also a two-phase flow -- version PR, then merge -- so a human reviews
+# the computed version and changelog before anything is tagged.
+#
+# WHY PUSH BY DIGEST AND MERGE, RATHER THAN ONE MULTI-ARCH BUILD
+# A single `platforms: linux/amd64,linux/arm64` build on an amd64 runner has
+# to emulate arm64 through QEMU. For a Node/solc toolchain that is roughly a
+# 5-10x slowdown and an occasional source of "works on amd64 only" bugs.
+# Free arm64 hosted runners (ubuntu-24.04-arm) are GA for public repositories,
+# so each architecture is built natively and in parallel, then stitched into a
+# manifest list with `docker buildx imagetools create`. Wall clock is the
+# slower of the two builds instead of the sum, with no emulation.
+#
+# ACTION PINNING
+# Every `uses:` is pinned to a full commit SHA with the version in a trailing
+# comment. See the policy block in ci.yml for the reasoning and
+# `scripts/check-action-pins.mjs` for the gate that enforces it.
+# ---------------------------------------------------------------------------
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # Manual re-run. Useful when a registry push failed after the tag already
+  # existed: the release-please step is then a no-op and the build reruns.
+  workflow_dispatch:
+
+# Releases MUST NOT be cancelled halfway. A cancelled run can leave per-arch
+# digests pushed with no manifest list pointing at them, which is invisible
+# garbage in the registry. Queue instead of cancelling -- the opposite of the
+# CI workflow's policy.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Default to read-only. Each job below widens this to exactly what it needs.
+permissions:
+  contents: read
+
+env:
+  # ghcr.io derives the namespace from the repository, so there is no separate
+  # registry account to provision -- GITHUB_TOKEN is already scoped to it.
+  REGISTRY: ghcr.io
+  # `github.repository` is already lowercase for this repo. A registry
+  # reference MUST be lowercase, so if the owner is ever renamed to something
+  # with capitals, lowercase it here rather than debugging a 400 from ghcr.
+  IMAGE_NAMESPACE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Version PR / tag / GitHub Release.
+  #
+  # FORK GATE. Everything downstream needs `packages: write` and an OIDC
+  # token, neither of which a fork's GITHUB_TOKEN carries. Without a gate a
+  # fork owner sees a red X on every push to their main with an opaque 403
+  # from the registry. Gating HERE and having every other job depend on this
+  # one means a fork sees the whole workflow SKIPPED (grey), which reads as
+  # "not for you" rather than "you broke it".
+  #
+  # Both halves matter: `repository_owner` keeps it off forks under other
+  # accounts, and `fork == false` also covers a same-owner fork.
+  # -------------------------------------------------------------------------
+  release-please:
+    name: Release PR / tag
+    runs-on: ubuntu-latest
+    if: >-
+      github.repository_owner == 'prpawan03' &&
+      github.event.repository.fork == false
+    permissions:
+      # Create the release commit, the tag and the GitHub Release.
+      contents: write
+      # Open and update the release pull request.
+      pull-requests: write
+    outputs:
+      # "true" only on the run that observes the release PR merge.
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name || steps.release.outputs['.--tag_name'] }}
+      version: ${{ steps.release.outputs.version || steps.release.outputs['.--version'] }}
+    steps:
+      # google-github-actions/release-please-action is ARCHIVED. The
+      # maintained home is googleapis/release-please-action -- same tool, new
+      # owner. Pointing at the archived repo still resolves, which is exactly
+      # why it is worth a comment: it will simply stop receiving fixes.
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        with:
+          # Manifest mode. The config lives in .github/release-please-config.json
+          # and the current versions in .github/.release-please-manifest.json,
+          # so the workflow carries no version state of its own.
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+          # The default GITHUB_TOKEN is enough because we never publish to a
+          # package registry from this step and never need to trigger another
+          # workflow from the release PR.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------------
+  # 2. Per-architecture build, pushed BY DIGEST.
+  #
+  # No tag is applied here. Tagging a per-arch image would race: two jobs
+  # writing `:1.2.3` would leave whichever finished last as the whole meaning
+  # of that tag, silently dropping an architecture. Digest-only pushes are
+  # commutative -- order cannot matter -- and the merge job below is the one
+  # place a tag is ever written.
+  # -------------------------------------------------------------------------
+  build:
+    name: build ${{ matrix.image.name }} (${{ matrix.platform.arch }})
+    needs: [release-please]
+    # Build on a release, and on an explicit dispatch so a failed push can be
+    # retried without inventing a fake commit. On an ordinary push to main
+    # that carries no release, this is skipped and the workflow ends here.
+    if: >-
+      needs.release-please.outputs.releases_created == 'true' ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+      # Push to ghcr.io under this repository's namespace.
+      packages: write
+    strategy:
+      # One broken image MUST NOT cancel the other five jobs. Seeing all the
+      # failures at once is worth the runner minutes.
+      fail-fast: false
+      matrix:
+        image:
+          - name: chain
+            dockerfile: docker/chain.Dockerfile
+            target: runtime
+          - name: deployer
+            dockerfile: docker/deployer.Dockerfile
+            target: runtime
+          - name: web
+            dockerfile: docker/web.Dockerfile
+            # web.Dockerfile also has a `dev` stage (Vite dev server). Naming
+            # the target explicitly stops a Dockerfile reorder from shipping
+            # the dev server to production.
+            target: prod
+        platform:
+          # `docker` is the buildx platform string; `arch` is the short name
+          # used in artifact names, where a slash is illegal.
+          - arch: amd64
+            runner: ubuntu-latest
+            docker: linux/amd64
+          - arch: arm64
+            # Free arm64 hosted runner, GA for public repositories. Native
+            # beats QEMU by roughly an order of magnitude on this toolchain.
+            runner: ubuntu-24.04-arm
+            docker: linux/arm64
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # A release build MUST be reproducible from the tag alone, so take
+          # the exact commit and nothing else. No submodules, no history.
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          # The default `docker` driver cannot do `cache-to type=gha`, cannot
+          # emit an SBOM attachment and cannot push by digest. The
+          # docker-container driver -- which this action selects by default,
+          # named here so nobody "simplifies" it away -- can do all three.
+          driver: docker-container
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # No long-lived PAT. GITHUB_TOKEN is minted per run, expires with
+          # it, and `packages: write` above is the only reason it can push.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image.name }}
+        env:
+          # Labels are per-image; ANNOTATIONS are what a manifest list can
+          # carry. Without index,manifest the annotations land only on the
+          # child manifests and the index that users actually pull shows no
+          # source, revision or description at all. This is the single most
+          # commonly missed line in a multi-arch pipeline.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          target: ${{ matrix.image.target }}
+          platforms: ${{ matrix.platform.docker }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # push-by-digest writes the image with NO tag and returns its
+          # digest. name-canonical keeps the repository name on the pushed
+          # manifest so imagetools can resolve it in the merge job.
+          outputs: type=image,name=${{ env.IMAGE_NAMESPACE }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+          # An SBOM and max-mode provenance are attached as in-toto
+          # attestations alongside the image. `mode=max` records the full
+          # build definition -- every source, every build argument -- which is
+          # what makes the provenance worth verifying rather than decorative.
+          sbom: true
+          provenance: mode=max
+          # Scope the cache per image AND per architecture. A shared scope
+          # would make the two architectures evict each other's layers on
+          # every run, which is worse than no cache.
+          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.arch }}
+
+      # The digest is passed to the merge job as an empty FILE NAMED for the
+      # digest, not as a job output. Job outputs cannot be collected from a
+      # matrix -- later legs overwrite earlier ones -- whereas artifacts from
+      # every leg can be downloaded together and globbed.
+      - name: Record the digest
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest='${{ steps.build.outputs.digest }}'
+          test -n "${digest}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: digests-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # -------------------------------------------------------------------------
+  # 3. Manifest list, signature and attestations.
+  #
+  # This is the job that makes the release visible: until it runs, the digests
+  # from step 2 are unreferenced blobs. It is also the only job that knows the
+  # digest users will actually pull -- the INDEX digest -- which is what must
+  # be signed and attested.
+  # -------------------------------------------------------------------------
+  merge:
+    name: publish ${{ matrix.image }}
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Fulcio exchanges this OIDC token for a short-lived signing
+      # certificate. This is what "keyless" means: no private key is stored
+      # anywhere, so there is no key to leak or rotate.
+      id-token: write
+      # Lets actions/attest write the attestation back to the repository.
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [chain, deployer, web]
+    # No job-level `outputs` here on purpose: a matrix job has one output slot
+    # shared by every leg, so the last leg to finish would overwrite the other
+    # two. The release-assets job re-resolves what it needs from the registry.
+    steps:
+      - name: Download the per-architecture digests
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          # Flatten amd64 and arm64 into one directory so the shell below can
+          # glob them without knowing how many architectures there were.
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags and annotations
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}
+          tags: |
+            # Branch and PR refs. Cheap to keep, and they make a
+            # workflow_dispatch build addressable without a version.
+            type=ref,event=branch
+            type=ref,event=pr
+            # The release tags. `value=` is supplied explicitly because this
+            # workflow runs on a BRANCH push, not on the tag ref, so there is
+            # no semver in github.ref for metadata-action to parse.
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            # A floating minor tag: 1.4 follows 1.4.x patches. Deliberately no
+            # {{major}} tag -- a bare `1` that silently absorbs breaking-ish
+            # minor changes is a support burden, not a convenience.
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            # Immutable, always-present handle. The only tag that is
+            # guaranteed to exist for every build, including dispatches.
+            type=sha
+            # `latest` ONLY on the default branch. Enabling it elsewhere is
+            # how a feature branch ends up being what `docker pull` returns.
+            type=raw,value=latest,enable={{is_default_branch}}
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
+
+      # `imagetools create` builds the index server-side: it copies no layers,
+      # it only writes a manifest that points at digests already in the
+      # registry. That is why the per-arch jobs could push from different
+      # runners and never needed to share a filesystem.
+      - name: Create the manifest list
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          # Arguments are collected into ARRAYS rather than interpolated into
+          # one command string. Annotation values contain spaces (the image
+          # description, for one), so unquoted word splitting would shred them
+          # into a dozen bogus flags.
+          mapfile -t tag_args < <(jq -r '.tags[] | ("-t", .)' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
+          mapfile -t annotation_args < <(jq -r '.annotations[] | ("--annotation", .)' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
+          # Each file in this directory is named for one per-arch digest.
+          mapfile -t sources < <(printf '%s\n' * | sed "s|^|${IMAGE}@sha256:|")
+          test "${#sources[@]}" -gt 0
+          docker buildx imagetools create \
+            "${tag_args[@]}" \
+            "${annotation_args[@]}" \
+            "${sources[@]}"
+
+      # Re-read the index digest from the registry rather than trusting a
+      # local computation. This is the digest that will be signed, attested
+      # and quoted to users, so it must come from the thing that was pushed.
+      - name: Resolve the index digest
+        id: index
+        run: |
+          set -euo pipefail
+          image='${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}'
+          ref="$(jq -cr '.tags[0]' <<< "${DOCKER_METADATA_OUTPUT_JSON}")"
+          digest="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r '.digest')"
+          test -n "${digest}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+          echo "### ${image}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "\`${digest}\`" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # SIGN BY DIGEST, NEVER BY TAG. `cosign sign image:latest` resolves the
+      # tag at signing time and stores the signature against whatever it
+      # resolved to; the tag can then be moved to a different image and the
+      # signature is left describing something nobody pulls. A digest is the
+      # content, so a signature on a digest cannot be transplanted.
+      - name: Sign the index with cosign (keyless)
+        env:
+          # Recorded in the transparency log entry so an auditor can tie the
+          # signature back to this workflow run.
+          COSIGN_EXPERIMENTAL: "false"
+        run: |
+          set -euo pipefail
+          cosign sign --yes \
+            --recursive \
+            '${{ steps.index.outputs.image }}@${{ steps.index.outputs.digest }}'
+
+      # Verification is run HERE, immediately, on the machine that just
+      # signed. A signature nobody ever verifies is a checkbox; verifying in
+      # the same run proves the identity assertions are the ones documented
+      # for consumers.
+      - name: Verify the signature
+        run: |
+          set -euo pipefail
+          # The identity regexp anchors ORG, REPO, WORKFLOW FILE and REF.
+          # Dropping any of them widens it dangerously: without the repo, any
+          # workflow in the org matches; without the ref, a signature made
+          # from an attacker's branch in a fork-turned-collaborator matches.
+          cosign verify \
+            --certificate-identity-regexp '^https://github\.com/prpawan03/decentralised_auction/\.github/workflows/release\.yml@refs/(heads/main|tags/v.*)$' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            '${{ steps.index.outputs.image }}@${{ steps.index.outputs.digest }}' > /dev/null
+          echo "cosign: signature verified for ${{ steps.index.outputs.digest }}"
+
+      # actions/attest-build-provenance and actions/attest-sbom are now thin
+      # wrappers around actions/attest. Using the consolidated action directly
+      # means one pin to review instead of three.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.index.outputs.image }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          # An empty predicate makes the action generate SLSA provenance from
+          # the run context itself, which is the whole point: the runner
+          # attests to what it observed, not to what the build claimed.
+          predicate: "{}"
+          # Write the attestation next to the image in the registry so
+          # `cosign verify-attestation` and `gh attestation verify` both find
+          # it without needing this repository's API.
+          push-to-registry: true
+
+  # -------------------------------------------------------------------------
+  # 4. Release assets.
+  #
+  # The SBOM already lives in the registry as an attestation, which is the
+  # right place for tooling. It is ALSO attached to the GitHub Release,
+  # because a human answering "which OpenSSL is in 1.2.3?" during an incident
+  # should not need a registry login and a buildx install to find out.
+  # -------------------------------------------------------------------------
+  release-assets:
+    name: Attach SBOMs to the release
+    needs: [release-please, merge]
+    # Only a real release has somewhere to attach assets to. A dispatch build
+    # publishes images and stops there.
+    if: needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload assets onto the existing GitHub Release.
+      contents: write
+      # Read the images back out of ghcr.io.
+      packages: read
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Extract each SBOM from the registry
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          for image in chain deployer web; do
+            ref="${IMAGE_NAMESPACE}/${image}:${TAG#v}"
+            # `imagetools inspect --format {{json .SBOM}}` reads the SBOM
+            # attachment buildx pushed with sbom=true. For a manifest list it
+            # returns one entry per platform, so the file is per-image and
+            # covers both architectures.
+            docker buildx imagetools inspect "${ref}" --format '{{json .SBOM}}' \
+              > "sbom/${image}-${TAG}.sbom.json"
+            test -s "sbom/${image}-${TAG}.sbom.json"
+          done
+          ls -l sbom
+
+      - name: Upload the SBOMs to the GitHub Release
+        env:
+          # gh needs no checkout when it is told which repository to act on.
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # --clobber makes a re-run idempotent instead of failing on an asset
+          # name that already exists.
+          gh release upload "${TAG}" sbom/*.sbom.json --clobber
+
+      # Keep a copy on the workflow run as well. Release assets can be deleted
+      # by anyone with write access; this is the audit copy.
+      - name: Archive the SBOMs on the run
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: sboms-${{ needs.release-please.outputs.tag_name }}
+          path: sbom/*.sbom.json
+          if-no-files-found: error

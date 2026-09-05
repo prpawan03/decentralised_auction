@@ -1,0 +1,58 @@
+{
+  "name": "@auction/web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Read-only-first frontend for the AuctionHouse local demo dapp.",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:contrast": "node --experimental-strip-types --no-warnings scripts/check-contrast.ts",
+    "check": "npm run typecheck && npm run check:contrast && npm run test",
+    "e2e": "playwright test"
+  },
+  "//dependencies": {
+    "wagmi": "PINNED TO 2.x ON PURPOSE. wagmi 3.x is current, but @rainbow-me/rainbowkit 2.2.11 declares peerDependencies.wagmi ^2.9.0 and has no v3 support. Installing wagmi 3 does not hard-fail at install time with npm's peer resolution, it fails at RUNTIME: RainbowKit reaches into wagmi 2 internals and the wallet modal silently renders empty. Do not bump wagmi past 2.x until RainbowKit ships v3 support. Same reason viem stays on 2.x.",
+    "tailwindcss": "v4 is CSS-first. There is deliberately NO tailwind.config.js and NO postcss.config.js. Theme tokens live in @theme inside src/styles/theme.css."
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "1.1.23",
+    "@rainbow-me/rainbowkit": "2.2.11",
+    "@tanstack/react-query": "5.102.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-hook-form": "7.86.0",
+    "react-router-dom": "7.18.2",
+    "sonner": "2.0.8",
+    "viem": "2.55.19",
+    "wagmi": "2.19.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@hookform/resolvers": "5.9.1",
+    "@playwright/test": "1.62.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.6",
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.0",
+    "axe-core": "4.13.0",
+    "jsdom": "30.0.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "vitest-axe": "0.1.0"
+  }
+}
