@@ -48,8 +48,12 @@ const DEFAULTS = {
   chainId: 31337,
   chainName: "Auction Local",
   rpcUrl: "http://127.0.0.1:8545",
-  auctionHouseAddress: deployment.auctionHouse as Address,
-  demoNftAddress: deployment.demoNft as Address,
+  /* `contracts`, not flat keys. This file is written by
+     contracts/scripts/export-abi.ts, and reading a shape it does not produce
+     made `npm run export-abi` - a documented step in the deploy workflow -
+     break the typecheck and leave both defaults undefined. */
+  auctionHouseAddress: deployment.contracts.AuctionHouse as Address,
+  demoNftAddress: deployment.contracts.DemoNFT as Address,
   ipfsGateway: DEFAULT_IPFS_GATEWAY,
 } as const;
 

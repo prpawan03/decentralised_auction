@@ -1,8 +1,12 @@
 {
-  "_comment": "GENERATED - replaced by `npm run export-abi`. Deploying from account 0 of the standard test mnemonic at nonce 0/1 always yields these addresses, so the checked-in values are correct for a fresh local chain. Runtime config still overrides them: see src/config/runtime.ts.",
   "chainId": 31337,
-  "chainName": "Auction Local",
-  "auctionHouse": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-  "demoNft": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-  "blockCreated": 0
+  "network": "localhost",
+  "deployedAt": "2026-09-02T14:50:17.784Z",
+  "blockNumber": 2,
+  "deployer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "platformFeeBps": 250,
+  "contracts": {
+    "AuctionHouse": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+    "DemoNFT": "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+  }
 }

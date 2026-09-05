@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfig } from "./runtime";
+import deployment from "@/deployments/31337.json";
 
 /**
  * Config resolution order is a deployment contract, not a preference:
@@ -10,7 +11,17 @@ import { resolveConfig } from "./runtime";
  * this indirection exists to prevent.
  */
 
-const REAL_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+/*
+ * The built-in default, taken FROM the deployment record rather than retyped.
+ *
+ * This was a hard-coded literal, and it had drifted: it held the DemoNFT
+ * address, because DemoNFT is deployed first (nonce 0) and AuctionHouse second
+ * (nonce 1). So these tests asserted the wrong default and passed, while the
+ * app pointed dev-mode reads at the wrong contract. Reading the same source
+ * the code reads means the two cannot disagree again - and these tests are
+ * about the resolution ORDER anyway, not about any particular address.
+ */
+const REAL_ADDRESS = deployment.contracts.AuctionHouse;
 const OTHER_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 describe("runtime config resolution", () => {
