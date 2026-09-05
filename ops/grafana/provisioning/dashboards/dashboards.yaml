@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Grafana dashboard provisioning.
+#
+# Mounted read-only at /etc/grafana/provisioning/dashboards/. It points Grafana
+# at a directory of dashboard JSON files rather than importing them once, so
+# the JSON in ops/grafana/dashboards/ stays the source of truth and a dashboard
+# is reviewed like code.
+# ---------------------------------------------------------------------------
+
+apiVersion: 1
+
+providers:
+  - name: auction
+    orgId: 1
+    # Empty folder means the dashboards land at the top level of the dashboard
+    # list, which is where a demo audience will look for them.
+    folder: ""
+    folderUid: ""
+    type: file
+
+    # 10 seconds, and the exact value matters.
+    #
+    # Grafana treats updateIntervalSeconds <= 10 as a request to WATCH the
+    # filesystem (fsnotify) instead of merely re-reading on a timer. Above 10
+    # it falls back to polling at that interval. At 10 an edit to a dashboard
+    # JSON on the host shows up on the next browser refresh, which is what
+    # makes iterating on a panel bearable. Raising this to 30 would silently
+    # switch off the watcher and make every edit feel broken.
+    updateIntervalSeconds: 10
+
+    # Keep a dashboard that has been deleted from disk out of the database too.
+    # Without this, a removed JSON file leaves a ghost dashboard behind for
+    # ever, and the ghost is not editable back into existence.
+    disableDeletion: false
+    allowUiUpdates: false
+
+    options:
+      # The container path. compose.monitoring.yaml bind-mounts
+      # ops/grafana/dashboards here, read-only.
+      path: /var/lib/grafana/dashboards
+      # Mirror the directory tree as Grafana folders. There is one flat
+      # directory today; this means adding ops/grafana/dashboards/indexer/
+      # later groups those dashboards automatically with no change here.
+      foldersFromFilesStructure: true

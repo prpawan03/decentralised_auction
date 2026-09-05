@@ -1,0 +1,56 @@
+# ---------------------------------------------------------------------------
+# Production-shape overlay.
+#
+# Use it together with the base file, and never on its own:
+#
+#     docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# `make prod` and `npm run prod` run exactly that command. The explicit file
+# list stops Compose from loading `compose.override.yaml`, so the development
+# settings do not apply.
+#
+# WARNING
+# "Production shape" here means "the static bundle, served by nginx". It does
+# NOT mean "ready for the public internet". The chain still holds public
+# private keys and the contracts are not audited. Read SECURITY.md before you
+# expose any part of this stack.
+# ---------------------------------------------------------------------------
+
+services:
+  chain:
+    environment:
+      # Mine a block for every transaction. A demonstration then answers at
+      # once.
+      BLOCK_TIME: ${BLOCK_TIME:-0}
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+
+  deployer:
+    environment:
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+
+  web:
+    build:
+      target: prod
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-local}
+    image: auction/web:prod
+    environment:
+      BUILD_VERSION: ${BUILD_VERSION:-local}
+    # The bundle is static, so a small container is enough.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
+        reservations:
+          memory: 32m
+    # Every hardening setting of the base file stays active:
+    #   read_only: true
+    #   security_opt: no-new-privileges:true
+    #   cap_drop: ALL
+    #   a tmpfs for the served directory
+    restart: unless-stopped

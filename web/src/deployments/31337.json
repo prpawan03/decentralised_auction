@@ -1,0 +1,12 @@
+{
+  "chainId": 31337,
+  "network": "localhost",
+  "deployedAt": "2026-09-02T14:50:17.784Z",
+  "blockNumber": 2,
+  "deployer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "platformFeeBps": 250,
+  "contracts": {
+    "AuctionHouse": "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512",
+    "DemoNFT": "0x5fbdb2315678afecb367f032d93f642f64180aa3"
+  }
+}

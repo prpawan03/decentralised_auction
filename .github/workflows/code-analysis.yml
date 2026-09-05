@@ -1,0 +1,96 @@
+name: Code analysis
+
+# Runs the pre-commit hygiene hooks strictly, and the heavier scanners
+# (detect-secrets, gitleaks, semgrep) as an informational job whose full log is
+# published as an artifact. Adapted from the team's Azure Pipelines template.
+
+on:
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PRE_COMMIT_HOME: ${{ github.workspace }}/.pre-commit-cache
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "24"
+
+jobs:
+  pre-commit:
+    name: pre-commit (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cache the pre-commit environments
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PRE_COMMIT_HOME }}
+          key: pre-commit|4|${{ hashFiles('.pre-commit-config.yaml') }}|${{ env.PYTHON_VERSION }}
+
+      - name: Install the workspace packages
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pre-commit
+
+      - name: Run the hooks on every file
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  code-analysis:
+    name: code analysis (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # gitleaks scans history; commitizen-branch reads the range.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache the pre-commit environments
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PRE_COMMIT_HOME }}
+          key: code-analysis|4|${{ hashFiles('.code-analysis-precommit.yaml') }}|${{ env.PYTHON_VERSION }}
+
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pre-commit
+
+      - name: Run the scanners
+        # Informational by design, as in the original pipeline: the log is the
+        # deliverable. Tighten to a hard failure once the baseline is trusted.
+        run: |
+          pre-commit run --config .code-analysis-precommit.yaml --all-files --show-diff-on-failure \
+            > code_analysis.log 2>&1 || true
+          tail -n 60 code_analysis.log
+
+      - name: Publish the log
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: code_analysis
+          path: code_analysis.log
+          retention-days: 14

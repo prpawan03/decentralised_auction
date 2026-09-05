@@ -1,0 +1,564 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "id": null,
+  "uid": "auction-overview",
+  "title": "Auction Overview",
+  "description": "Chain health and AuctionHouse contract state. Fed by the custom exporter in docker/exporter (json_exporter cannot parse JSON-RPC hex quantities). JSON has no comment syntax, so the notes live in each panel's description field and in ops/README.md.",
+  "tags": ["auction", "chain", "provisioned"],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "weekStart": "",
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m"]
+  },
+  "fiscalYearStartMonth": 0,
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Chain RPC",
+      "description": "auction_chain_rpc_up. 0 means the last poll could not reach the node. The exporter keeps serving /metrics while this is 0, so a gap in this series means the EXPORTER died, not the chain.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 1 } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "unit": "none",
+          "noValue": "NO DATA"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_chain_rpc_up",
+          "instant": true,
+          "range": false,
+          "legendFormat": "rpc"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Live auctions",
+      "description": "Auctions in the Live state: still accepting bids or awaiting settlement. This is the only non-terminal status in the contract.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "blue", "value": 1 }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_live_auctions",
+          "instant": false,
+          "range": true,
+          "legendFormat": "live"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Money at risk",
+      "description": "Total ETH the AuctionHouse is holding in escrow across LIVE auctions only. Settled and cancelled auctions have already paid out or credited a refund, so their escrow is no longer at risk. Divided by 1e18 to convert wei to ETH; Prometheus stores float64, so the underlying wei figure loses exactness above 2^53 but stays accurate to well under a microether at these magnitudes.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 9, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "yellow", "value": 0.0001 },
+              { "color": "orange", "value": 10 }
+            ]
+          },
+          "unit": "suffix: ETH",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_escrow_total_wei / 1e18",
+          "instant": false,
+          "range": true,
+          "legendFormat": "escrow"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total auctions",
+      "description": "auction_total_auctions, straight from totalAuctions(). Valid auction ids run from 0 to this minus 1. Shows 0 with a grey 'contracts not deployed' look until the deployer has run.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 15, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "text" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_total_auctions",
+          "instant": false,
+          "range": true,
+          "legendFormat": "total"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Gas price",
+      "description": "auction_gas_price_wei divided by 1e9 to give gwei. On a Hardhat node under automatic mining this is essentially constant; it moves when the base fee responds to block fullness.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
+          "unit": "suffix: gwei",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "percentChangeColorMode": "standard"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_gas_price_wei / 1e9",
+          "instant": false,
+          "range": true,
+          "legendFormat": "gas"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Block height",
+      "description": "Latest block number over time. A FLAT LINE IS NORMAL on this stack: with BLOCK_TIME=0 Hardhat mines only when a transaction arrives, so height is a staircase that steps on every bid. Set BLOCK_TIME=2 (the development default) to get a steady ramp instead.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_chain_block_height",
+          "instant": false,
+          "range": true,
+          "legendFormat": "block height"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "RPC latency and availability",
+      "description": "p50/p95 round-trip of eth_blockNumber, with rpc_up drawn on the right axis as a 0/1 line. Buckets start at 1ms because a healthy in-network call lands in single-digit milliseconds; the default prom-client buckets would collapse every healthy sample into one bucket. $__rate_interval adapts the window to the dashboard zoom, so the quantiles stay meaningful at both 15m and 6h.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "rpc up" },
+            "properties": [
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "short" },
+              { "id": "max", "value": 1 },
+              { "id": "min", "value": 0 },
+              { "id": "custom.lineInterpolation", "value": "stepAfter" },
+              { "id": "custom.fillOpacity", "value": 20 },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(auction_chain_rpc_latency_seconds_bucket[$__rate_interval])))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(auction_chain_rpc_latency_seconds_bucket[$__rate_interval])))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_chain_rpc_up",
+          "instant": false,
+          "range": true,
+          "legendFormat": "rpc up"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Escrow at risk over time",
+      "description": "The money-at-risk figure as a series. It steps UP when a bid raises the leading amount on a live auction and steps DOWN when an auction settles or is cancelled and the contract releases the funds. A sustained rise with no settlements is the shape worth noticing.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "ETH in escrow",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "gradientMode": "opacity",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] },
+          "unit": "suffix: ETH",
+          "decimals": 4,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_escrow_total_wei / 1e18",
+          "instant": false,
+          "range": true,
+          "legendFormat": "escrow at risk"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "piechart",
+      "title": "Auction outcomes",
+      "description": "Terminal states from the contract's Status enum, plus Live. Delivery failed means the auction sold but the token could not be handed over, so the sale was voided and the winner holds a full refund; any non-zero slice there warrants investigation. These are gauges read from chain state, not counters, so the breakdown resets when the chain does.",
+      "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+          "mappings": [],
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Delivery failed" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Live" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Settled" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "pieType": "donut",
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value"]
+        },
+        "displayLabels": ["value"]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_live_auctions",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Live"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_settled_total",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Settled"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_reserve_not_met_total",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Reserve not met"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_cancelled_total",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Cancelled"
+        },
+        {
+          "refId": "E",
+          "datasource": { "type": "prometheus", "uid": "auction-prometheus" },
+          "editorMode": "code",
+          "expr": "auction_delivery_failed_total",
+          "instant": true,
+          "range": false,
+          "legendFormat": "Delivery failed"
+        }
+      ]
+    }
+  ]
+}

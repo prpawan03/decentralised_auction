@@ -1,0 +1,142 @@
+name: Bug report
+description: Report something that does not work correctly.
+title: "fix: "
+labels:
+  - bug
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report.
+
+        Read the problem table in `CONTRIBUTING.md` first. It answers the
+        most common problems.
+
+        Do **NOT** report a security problem here. Use the private form:
+        **Security**, then **Report a vulnerability**.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you report
+      description: Mark every box. A report without these steps takes longer to answer.
+      options:
+        - label: I read the problem table in CONTRIBUTING.md.
+          required: true
+        - label: I searched the existing issues and found no match.
+          required: true
+        - label: I ran `make reset-chain` (or `npm run reset-chain`) and the problem stayed.
+          required: true
+        - label: This is not a security problem. A security problem goes to the private form.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part fails?
+      options:
+        - I do not know
+        - chain (the local blockchain)
+        - deployer (contract deployment or seeding)
+        - web (the user interface)
+        - contracts (Solidity behaviour)
+        - Docker or Compose
+        - MetaMask or the wallet connection
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happens
+    attributes:
+      label: What happens?
+      description: Write what you see. Write one fact in one sentence.
+      placeholder: The deployer container exits with code 1 and the web container never starts.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-should-happen
+    attributes:
+      label: What should happen?
+      placeholder: The deployer should exit with code 0 and the web container should start.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we repeat the problem?
+      description: Write one step in one line. Start from a clean clone.
+      value: |
+        1. Run `git clone ...`
+        2. Run `make setup`
+        3. Run `make up`
+        4. Read the output
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: >-
+        Paste the output of `make logs` (or `npm run logs`). Remove any private
+        value first. The output is formatted as a code block, so no backticks
+        are needed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: smoke
+    attributes:
+      label: Smoke test output
+      description: Paste the output of `npm run smoke`.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 26200, or macOS 15.4, or Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: docker
+    attributes:
+      label: Docker and Compose versions
+      description: Run `docker version --format "{{.Server.Version}}"` and `docker compose version`.
+      placeholder: Docker 28.3.2, Compose v2.38.2
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Run `node --version`.
+      placeholder: v24.4.0
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Run `git rev-parse --short HEAD`.
+      placeholder: a00d783
+    validations:
+      required: true
+
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else?
+      description: Add a screenshot, a note, or a work-around that you found.
+    validations:
+      required: false

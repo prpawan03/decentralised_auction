@@ -1,0 +1,45 @@
+# Code-analysis hooks. Heavier scanners that run in CI on every pull request
+# (.github/workflows/code-analysis.yml) and on demand:
+#
+#   pre-commit run --config .code-analysis-precommit.yaml --all-files
+#
+# gitleaks builds from Go and semgrep installs from PyPI, so a local run needs
+# a Go toolchain and Linux or macOS. On Windows use the container images the
+# workflow documents, or rely on the CI run.
+#
+# bandit and pylint from the original template are omitted: this repository
+# has no Python code, so they would report nothing. Add them back with the
+# first Python module.
+
+exclude: |
+  (?x)^(
+    package-lock\.json|
+    web/src/abi/.*\.ts|
+    contracts/src/vendor/.*|
+    contracts/legacy/.*
+  )$
+
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: ^(package-lock\.json|\.env\.example|contracts/src/vendor/.*)$
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
+        # .gitleaks.toml allowlists the public Hardhat test accounts.
+
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.130.0
+    hooks:
+      - id: semgrep
+        args:
+          - --config=p/default
+          - --config=p/typescript
+          - --config=p/smart-contracts
+          - --error
+          - --skip-unknown-extensions

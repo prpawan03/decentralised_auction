@@ -1,0 +1,358 @@
+// ---------------------------------------------------------------------------
+// One-click development environment for the NFT auction demonstration.
+//
+// Open it in GitHub Codespaces, or locally with the VS Code "Dev Containers"
+// extension (Dev Containers: Reopen in Container). Either way you land in a
+// Node 24 box that can drive the Docker Compose stack with the same commands
+// the README documents: `make up`, `make watch`, `make down`.
+//
+// This file is JSONC. Comments and trailing commas are legal here because the
+// Dev Containers specification parses it with a JSONC reader, not JSON.parse.
+//
+// ===========================================================================
+// WHY THIS IS A STANDALONE DEV BOX AND NOT A COMPOSE SERVICE
+// ===========================================================================
+// devcontainer.json has two flavours:
+//
+//   (a) `image` / `build`  -> the dev container is its own thing, and the
+//                             application stack stays a normal Compose stack.
+//   (b) `dockerComposeFile` -> the dev container BECOMES one of the services
+//                             in compose.yaml, started by Compose itself.
+//
+// We deliberately use (a). Reasons, in order of weight:
+//
+//   1. The stack's lifecycle stays IDENTICAL inside and outside the container.
+//      `make up` is `docker compose up -d --build` here, on a laptop, and in
+//      CI. A contributor learns one mental model, not two. Flavour (b) would
+//      make the editor itself a member of `docker compose ps`, so `make down`
+//      would try to stop the machine you are typing in.
+//
+//   2. The stack has optional profiles (`indexer`, `monitoring`) and an
+//      explicit ordering gate: `web` waits for `deployer` to exit 0. Flavour
+//      (b) needs `runServices` to enumerate what to start, which quietly
+//      duplicates that dependency graph in a second place. Two copies of a
+//      startup contract is one copy too many.
+//
+//      (If you ever DO switch to flavour (b): `runServices` defaults to ALL
+//      services in the file, so Codespaces would start the indexer and the
+//      whole monitoring overlay on every create. You would have to set
+//      `runServices` explicitly. Another reason not to.)
+//
+//   3. compose.override.yaml documents that there is NO bind mount into the
+//      containers on purpose -- it uses `develop: watch:` to copy changed
+//      files in over the Docker API. Flavour (b) would want a bind mount of
+//      the workspace into the dev service, reintroducing exactly the file
+//      system boundary that override file was written to avoid.
+//
+// The cost of flavour (a) is that we must reach the host Docker daemon from
+// inside the dev container. That is what the feature below is for.
+// ---------------------------------------------------------------------------
+{
+  "name": "NFT Auction Dapp (Node 24 + Docker)",
+
+  // -------------------------------------------------------------------------
+  // Base image
+  // -------------------------------------------------------------------------
+  // The Microsoft javascript-node image already ships Node 24, npm, git, a
+  // configured non-root `node` user and the common-utils shell setup. Because
+  // Node is already here we do NOT add the `node` feature: adding it would
+  // install a second Node through nvm and shadow the one in the image, which
+  // is a classic source of "works in the terminal, fails in the task" bugs.
+  //
+  // Node 24 matches the stack: package.json declares engines.node >= 22 and
+  // every Dockerfile builds on node:24-alpine. Keeping the dev box on the same
+  // major means `npm ci` resolves the same optional/platform deps as CI.
+  //
+  // `1-24-bookworm` pins the feature-set major (1) and the Node major (24)
+  // while still receiving security rebuilds. Debian bookworm rather than
+  // alpine because Playwright's browser dependencies are glibc-based.
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-24-bookworm",
+
+  // -------------------------------------------------------------------------
+  // Features
+  // -------------------------------------------------------------------------
+  "features": {
+    // *** THE LOAD-BEARING ONE. READ THIS BEFORE CHANGING IT. ***
+    //
+    // docker-OUTSIDE-of-docker mounts the HOST's /var/run/docker.sock into
+    // this container and installs only the CLI. Every `docker` and
+    // `docker compose` command therefore talks to the host daemon, and the
+    // chain / deployer / web containers come up as SIBLINGS of this one.
+    //
+    // Do NOT swap this for `docker-in-docker`. DinD starts a NESTED daemon
+    // inside this container. The stack would then run inside that nested
+    // daemon, in a network namespace the host cannot see, so:
+    //   - port forwarding to your browser breaks,
+    //   - images built here are invisible to the host and to `docker system
+    //     prune` on the host, and
+    //   - every image layer is rebuilt from scratch because the host build
+    //     cache is unreachable.
+    // The whole point of this dev box is to DRIVE the existing stack, not to
+    // host a private copy of it.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      // "moby" is the open-source Docker build; false would pull Docker CE
+      // from Docker Inc.'s repo, which is licensed differently for orgs.
+      "moby": true,
+      // Compose v2 as a `docker compose` subcommand. The Makefile sets
+      // `COMPOSE ?= docker compose` and explicitly refuses the archived
+      // `docker-compose` script, so v2 is required, not optional.
+      "dockerDashComposeVersion": "v2",
+      "installDockerBuildx": true
+    },
+
+    // `gh` is used for PRs and for `gh codespace ports` when you want to
+    // change a forwarded port's visibility from the terminal.
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Container run arguments
+  // -------------------------------------------------------------------------
+  // The Compose services publish on the HOST's loopback (`127.0.0.1:5173:...`
+  // in compose.yaml -- a deliberate security choice, since the chain has
+  // funded accounts with public keys). "The host" is not this container, so
+  // `curl http://127.0.0.1:5173` from this shell reaches nothing.
+  //
+  // `host-gateway` gives us a name that resolves to the host, so scripted
+  // checks from inside the dev box work:
+  //     curl -s http://host.docker.internal:5173/healthz
+  //     curl -s -X POST http://host.docker.internal:8545 ...
+  //
+  // Your BROWSER is unaffected -- it goes through the forwarded ports below.
+  "runArgs": ["--add-host=host.docker.internal:host-gateway"],
+
+  // -------------------------------------------------------------------------
+  // Ports
+  // -------------------------------------------------------------------------
+  // These are the four host ports the stack publishes. The indexer is
+  // deliberately absent: compose.indexer.yaml proxies Ponder through nginx on
+  // the web port, so /graphql and /api/* arrive on 5173 with no extra port.
+  "forwardPorts": [5173, 8545, 3000, 9090],
+
+  "portsAttributes": {
+    "5173": {
+      "label": "Auction UI",
+      // The one port a human actually wants to click. Vite in dev
+      // (compose.override.yaml), nginx on 8080 in prod (compose.yaml) --
+      // same host port either way, so the URL never changes.
+      "onAutoForward": "notify"
+    },
+    "8545": {
+      "label": "JSON-RPC",
+      // Machine-to-machine: MetaMask and scripts. Popping a toast for it on
+      // every `make up` is noise. Forward it, say nothing.
+      "onAutoForward": "silent",
+      // Non-HTTP, so do not let the client try to render it in a webview.
+      "protocol": "http"
+    },
+    "3000": {
+      "label": "Grafana",
+      // Only exists under `make monitoring`. Silent, because most sessions
+      // never start that profile.
+      "onAutoForward": "silent"
+    },
+    "9090": {
+      "label": "Prometheus",
+      // As above: opt-in profile, so it stays quiet.
+      "onAutoForward": "silent"
+    }
+  },
+
+  // Anything else the stack happens to open (a `vite preview`, a debugger, a
+  // one-off `docker compose run`) is forwarded but never announced.
+  "otherPortsAttributes": {
+    "onAutoForward": "silent"
+  },
+
+  // -------------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------------
+  // Order is: initializeCommand (on the HOST) -> onCreateCommand ->
+  // updateContentCommand -> postCreateCommand -> postStartCommand ->
+  // postAttachCommand.
+  //
+  // `npm ci` belongs in postCreateCommand, not onCreateCommand: onCreate runs
+  // during prebuild where secrets and the full workspace state are not
+  // guaranteed, and postCreate is the last step that still runs exactly once
+  // per container -- which is what a dependency install wants.
+  //
+  // Invoked as `bash <script>` rather than `./<script>` on purpose: this
+  // repository is developed on Windows, where Git does not preserve the
+  // executable bit, so relying on it would give an intermittent
+  // "Permission denied" on create. The script is still chmod +x for people
+  // who run it by hand.
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // Do not hand the developer an editor until dependencies are installed.
+  // Without this, VS Code attaches while `npm ci` is still running, the
+  // TypeScript server starts against an empty node_modules, and every import
+  // is flagged red for a minute. `waitFor` blocks the attach instead.
+  "waitFor": "postCreateCommand",
+
+  // -------------------------------------------------------------------------
+  // Codespaces machine sizing
+  // -------------------------------------------------------------------------
+  // `make up` builds three images (chain, deployer, web) and `make full` adds
+  // Ponder, Prometheus and Grafana on top. compose.yaml alone reserves 2 GiB
+  // for the chain and 2 GiB for the deployer. The 2-core / 8 GB default
+  // Codespace can thrash during the first build, so ask for 4 cores.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  // -------------------------------------------------------------------------
+  // Editor
+  // -------------------------------------------------------------------------
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // --- Solidity -----------------------------------------------------
+        // The Hardhat extension, because the contracts workspace IS a
+        // Hardhat 3 project. It reads contracts/hardhat.config.ts for the
+        // compiler version (0.8.36) and the OpenZeppelin remappings, so
+        // go-to-definition works across node_modules. A generic Solidity
+        // extension guesses at both.
+        "NomicFoundation.hardhat-solidity",
+
+        // --- JavaScript / TypeScript --------------------------------------
+        // NOTE: there is no ESLint config in the repo today -- quality gates
+        // are prettier + solhint + `tsc --noEmit` + vitest. The extension is
+        // listed anyway because it is inert without a config file and it
+        // means the day someone adds eslint.config.js, every contributor
+        // already has the editor integration. It costs nothing until then.
+        "dbaeumer.vscode-eslint",
+
+        // Prettier is the actual formatter of record. Its options live in
+        // the "prettier" key of the root package.json (printWidth 100,
+        // endOfLine lf), and `npm run fmt:check` enforces them in CI.
+        "esbenp.prettier-vscode",
+
+        // --- Docker -------------------------------------------------------
+        // Everything here is Compose. This gives syntax, schema validation
+        // and the container explorer -- which, thanks to
+        // docker-outside-of-docker, lists the real sibling containers.
+        "ms-azuretools.vscode-docker",
+
+        // --- Project conventions ------------------------------------------
+        // .editorconfig is the source of truth for indentation and line
+        // endings. Without this extension VS Code silently uses its own
+        // defaults and you get 4-space Solidity next to 2-space TypeScript.
+        "EditorConfig.EditorConfig",
+
+        // --- Tests --------------------------------------------------------
+        // web/playwright.config.ts + web/e2e exist and `npm run e2e` is a
+        // real script; this puts those specs in the Test Explorer.
+        "ms-playwright.playwright",
+        // vitest is the unit runner for the web workspace.
+        "vitest.explorer",
+
+        // --- Misc ---------------------------------------------------------
+        // The Makefile is the documented entry point, so make its targets
+        // clickable rather than something you have to memorise.
+        "ms-vscode.makefile-tools",
+        // .env / .env.example highlighting; `make setup` creates .env.
+        "mikestead.dotenv"
+      ],
+
+      // These MUST agree with .editorconfig and .gitattributes. They do:
+      //   .editorconfig  -> lf, utf-8, 2 spaces, final newline, trim
+      //                     trailing whitespace, max_line_length 100,
+      //                     4 spaces for *.sol, tabs for Makefile, and
+      //                     trailing whitespace PRESERVED in *.md.
+      //   .gitattributes -> `* text=auto eol=lf`, with *.sh/*.yaml/Makefile
+      //                     forced to LF because they run inside Linux
+      //                     containers.
+      // The EditorConfig extension enforces most of this per-file; the
+      // settings below make the defaults match so a NEW file is born correct.
+      "settings": {
+        // LF everywhere. A CRLF shell script produces the infamous
+        // `/bin/sh^M: bad interpreter` inside the containers.
+        "files.eol": "\n",
+        "files.encoding": "utf8",
+        "files.insertFinalNewline": true,
+        "files.trimTrailingWhitespace": true,
+        "editor.insertSpaces": true,
+        "editor.tabSize": 2,
+        // max_line_length = 100, matching prettier's printWidth.
+        "editor.rulers": [100],
+
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+
+        // .editorconfig sets `trim_trailing_whitespace = false` for markdown,
+        // because two trailing spaces are a hard line break. Contradicting it
+        // here would silently break formatting in the docs.
+        "[markdown]": {
+          "files.trimTrailingWhitespace": false
+        },
+
+        // .editorconfig: `[*.sol] indent_size = 4`. Prettier has no Solidity
+        // support in this repo (prettier-plugin-solidity is not installed),
+        // so hand formatting to the Hardhat extension instead of letting
+        // Prettier claim the file and do nothing.
+        "[solidity]": {
+          "editor.tabSize": 4,
+          "editor.defaultFormatter": "NomicFoundation.hardhat-solidity"
+        },
+
+        // .editorconfig: `[Makefile] indent_style = tab`. A recipe indented
+        // with spaces is a hard error from make.
+        "[makefile]": {
+          "editor.insertSpaces": false
+        },
+
+        // Shell scripts run in Linux containers; never let a formatter or a
+        // stray setting put CRLF in one.
+        "[shellscript]": {
+          "files.eol": "\n"
+        },
+
+        // The compose overlays are not plain YAML -- they use `!override` and
+        // `!reset` tags, and the schema gives useful completion.
+        "files.associations": {
+          "compose*.yaml": "dockercompose",
+          "*.env.example": "dotenv"
+        },
+
+        // Keep the file tree readable: these are build output, not source.
+        "files.exclude": {
+          "**/node_modules": true,
+          "contracts/artifacts": true,
+          "contracts/cache": true,
+          "web/dist": true
+        },
+        // ...but still let search reach node_modules only when asked.
+        "search.exclude": {
+          "**/node_modules": true,
+          "**/package-lock.json": true
+        },
+
+        // The container has bash; make it the default so the Makefile's
+        // `.SHELLFLAGS := -eu -c` recipes behave as documented.
+        "terminal.integrated.defaultProfile.linux": "bash",
+
+        // Use the repo's own TypeScript, not the one bundled with VS Code, so
+        // the editor and `npm run typecheck` agree.
+        "typescript.tsdk": "node_modules/typescript/lib",
+
+        // npm workspaces: surface the scripts from every workspace package.
+        "npm.packageManager": "npm"
+      }
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Identity
+  // -------------------------------------------------------------------------
+  // Run as the image's non-root user. The docker-outside-of-docker feature
+  // adds this user to the group that owns the mounted socket, so `docker`
+  // works without sudo -- and nothing we create in the workspace ends up
+  // owned by root, which is the usual reason a devcontainer refuses to let
+  // you `git commit` afterwards.
+  "remoteUser": "node"
+}

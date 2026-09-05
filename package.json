@@ -1,0 +1,58 @@
+{
+  "name": "decentralised-auction",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-demonstration NFT auction dapp. Hardhat 3 chain, Solidity contracts and a Vite user interface.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "contracts",
+    "web"
+  ],
+  "scripts": {
+    "//": "Every script below mirrors a Makefile target. Windows PowerShell has no `make`, so use these instead. `npm run help` lists them.",
+    "help": "node scripts/help.mjs",
+    "setup": "node scripts/setup.mjs",
+    "//run": "--- Run the stack ---",
+    "up": "docker compose up -d --build",
+    "dev": "docker compose up --build --watch",
+    "watch": "npm run dev",
+    "prod": "docker compose -f compose.yaml -f compose.prod.yaml up -d --build",
+    "down": "docker compose down --remove-orphans",
+    "logs": "docker compose logs -f --tail 200",
+    "ps": "docker compose ps",
+    "clean": "docker compose down --remove-orphans --volumes --rmi local",
+    "reset-chain": "docker compose rm --stop --force --volumes chain deployer web && docker compose up -d --build",
+    "//contracts": "--- Contracts on the running chain ---",
+    "deploy": "docker compose run --rm --no-deps -e SEED_DEMO_DATA=false deployer",
+    "seed": "docker compose run --rm --no-deps --entrypoint sh deployer -c \"npm run seed --workspace contracts\"",
+    "//quality": "--- Quality gates ---",
+    "test": "npm run test --workspaces --if-present",
+    "test:contracts": "npm run test --workspace contracts --if-present",
+    "test:web": "npm run test --workspace web --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "fmt": "prettier --write \"**/*.{js,mjs,ts,tsx,json,css,md,yml,yaml}\" && npm run fmt --workspaces --if-present",
+    "fmt:check": "prettier --check \"**/*.{js,mjs,ts,tsx,json,css,md,yml,yaml}\"",
+    "smoke": "node scripts/smoke.mjs",
+    "//checks": "--- Configuration checks ---",
+    "compose:config": "docker compose config --quiet && docker compose -f compose.yaml -f compose.prod.yaml config --quiet && echo \"compose: both file sets parse\"",
+    "check:actions": "node scripts/check-action-pins.mjs",
+    "//profiles": "--- Optional Compose profiles ---",
+    "indexer": "docker compose -f compose.yaml -f compose.override.yaml -f compose.indexer.yaml --profile indexer up -d --build",
+    "monitoring": "docker compose -f compose.yaml -f compose.override.yaml -f compose.monitoring.yaml --profile monitoring up -d --build",
+    "full": "docker compose -f compose.yaml -f compose.override.yaml -f compose.indexer.yaml -f compose.monitoring.yaml --profile indexer --profile monitoring up -d --build"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  },
+  "prettier": {
+    "printWidth": 100,
+    "singleQuote": false,
+    "trailingComma": "all",
+    "endOfLine": "lf"
+  }
+}

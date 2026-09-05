@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Issue template chooser.
+#
+# `blank_issues_enabled: false` makes every reporter pick a form. A form gives
+# the information that a maintainer needs, so the first answer can be useful.
+# ---------------------------------------------------------------------------
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/prpawan03/decentralised_auction/security/advisories/new
+    about: >-
+      Use the private form. Do NOT open a public issue for a problem that lets
+      somebody take funds or take control. Read SECURITY.md first.
+
+  - name: Ask a question
+    url: https://github.com/prpawan03/decentralised_auction/discussions
+    about: >-
+      Ask about set-up, MetaMask or how the project works. An issue is for a
+      fault or for a request.
+
+  - name: Read the set-up guide
+    url: https://github.com/prpawan03/decentralised_auction/blob/main/CONTRIBUTING.md
+    about: >-
+      CONTRIBUTING.md lists the commands and it holds a table of common
+      problems. Read it before you open an issue.
