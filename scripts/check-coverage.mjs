@@ -64,6 +64,7 @@ let hit = 0;
 let files = 0;
 const perFile = [];
 let currentFile = "";
+let skipping = false;
 let fileFound = 0;
 let fileHit = 0;
 
@@ -73,7 +74,19 @@ for (const line of report.split(/\r?\n/)) {
     currentFile = rawValue ?? "";
     fileFound = 0;
     fileHit = 0;
+    // Vendored contracts (src/vendor) are upstream code with upstream tests.
+    // Counting them would let a third-party file move this repository's own
+    // floor, in either direction. Skip the record until it ends.
+    if (currentFile.split("\\").join("/").includes("/src/vendor/") || currentFile.split("\\").join("/").startsWith("src/vendor/")) {
+      currentFile = "";
+      skipping = true;
+      continue;
+    }
+    skipping = false;
     files += 1;
+  } else if (skipping) {
+    if (line.trim() === "end_of_record") skipping = false;
+    continue;
   } else if (key === fields[metric].found) {
     fileFound = Number(rawValue ?? 0);
     found += fileFound;
