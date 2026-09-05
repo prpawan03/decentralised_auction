@@ -129,9 +129,30 @@ let deployment: { contracts: { AuctionHouse: Address; DemoNFT: Address } };
 try {
   deployment = JSON.parse(await readFile(deploymentFile, "utf8"));
 } catch {
-  throw new Error(
-    `No deployment record at ${deploymentFile}. Run "npm run deploy" against ${networkName} first.`,
-  );
+  // No record on disk. That is the normal case when the deployer container is
+  // restarted against a chain that already holds the contracts: the entrypoint
+  // skips the deployment because the bytecode is present, and the record the
+  // previous container wrote died with it. The configured addresses are the
+  // same ones the entrypoint trusted for that decision, so trust them here too,
+  // after confirming code actually exists at both.
+  const fromEnv = {
+    AuctionHouse: process.env.AUCTION_HOUSE_ADDRESS as Address | undefined,
+    DemoNFT: process.env.DEMO_NFT_ADDRESS as Address | undefined,
+  };
+  if (!fromEnv.AuctionHouse || !fromEnv.DemoNFT) {
+    throw new Error(
+      `No deployment record at ${deploymentFile} and AUCTION_HOUSE_ADDRESS / DEMO_NFT_ADDRESS are not set. ` +
+        `Run "npm run deploy" against ${networkName} first.`,
+    );
+  }
+  for (const [name, address] of Object.entries(fromEnv) as [string, Address][]) {
+    const code = await publicClient.getCode({ address });
+    if (!code || code === "0x") {
+      throw new Error(`${name} is configured at ${address} but no bytecode exists there on ${networkName}.`);
+    }
+  }
+  console.log(`No deployment record; using configured addresses (bytecode verified).`);
+  deployment = { contracts: { AuctionHouse: fromEnv.AuctionHouse, DemoNFT: fromEnv.DemoNFT } };
 }
 
 const house = await viem.getContractAt("AuctionHouse", deployment.contracts.AuctionHouse);
@@ -160,6 +181,26 @@ function metadataUri(item: Item): string {
   return `data:application/json;base64,${Buffer.from(json, "utf8").toString("base64")}`;
 }
 
+/**
+ * Sends a write and waits until it is mined.
+ *
+ * Every helper below reads chain state right after a write: the token id after
+ * a mint, the auction id after a listing, the minimum bid before a bid. Under
+ * automine a write is mined before the call returns, so the reads are safe.
+ * Under the interval mining the Docker stack uses (BLOCK_TIME=2) a write only
+ * returns its hash, and the next read runs against a block in which the write
+ * has not happened yet. The first symptom was minimumBid(0) reverting with
+ * AuctionNotFound while auction 0 was being mined. Waiting for the receipt is
+ * the fix; a fixed sleep would only move the race.
+ */
+async function send(pending: Promise<`0x${string}`>): Promise<void> {
+  const hash = await pending;
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`transaction ${hash} reverted`);
+  }
+}
+
 /** Mints an item to `seller`, approves the house and opens an auction. */
 async function list(
   seller: Wallet,
@@ -169,15 +210,15 @@ async function list(
   const { reserve = 0n, buyNow = 0n, duration } = options;
 
   const tokenId = await nft.read.totalMinted();
-  await nft.write.mint([seller.account.address, metadataUri(item)], {
+  await send(nft.write.mint([seller.account.address, metadataUri(item)], {
     account: seller.account,
-  });
-  await nft.write.approve([house.address, tokenId], { account: seller.account });
+  }));
+  await send(nft.write.approve([house.address, tokenId], { account: seller.account }));
 
   const auctionId = await house.read.totalAuctions();
-  await house.write.createAuction([nft.address, tokenId, reserve, buyNow, duration], {
+  await send(house.write.createAuction([nft.address, tokenId, reserve, buyNow, duration], {
     account: seller.account,
-  });
+  }));
 
   return { auctionId, tokenId };
 }
@@ -196,16 +237,16 @@ async function listDutch(
   options: { start: bigint; floor: bigint; duration: bigint },
 ): Promise<{ auctionId: bigint; tokenId: bigint }> {
   const tokenId = await nft.read.totalMinted();
-  await nft.write.mint([seller.account.address, metadataUri(item)], {
+  await send(nft.write.mint([seller.account.address, metadataUri(item)], {
     account: seller.account,
-  });
-  await nft.write.approve([house.address, tokenId], { account: seller.account });
+  }));
+  await send(nft.write.approve([house.address, tokenId], { account: seller.account }));
 
   const auctionId = await house.read.totalAuctions();
-  await house.write.createDutchAuction(
+  await send(house.write.createDutchAuction(
     [nft.address, tokenId, options.start, options.floor, options.duration],
     { account: seller.account },
-  );
+  ));
 
   return { auctionId, tokenId };
 }
@@ -214,7 +255,7 @@ async function listDutch(
 async function bid(bidder: Wallet, auctionId: bigint, target: bigint): Promise<bigint> {
   const minimum = await house.read.minimumBid([auctionId]);
   const amount = target > minimum ? target : minimum;
-  await house.write.bid([auctionId], { account: bidder.account, value: amount });
+  await send(house.write.bid([auctionId], { account: bidder.account, value: amount }));
   return amount;
 }
 
@@ -278,8 +319,8 @@ const closeAt = Math.max(
 await fastForwardTo(closeAt + 1);
 
 // Anyone may settle. The house owner does it here only because it is convenient.
-await house.write.settle([settledAuction.auctionId]);
-await house.write.settle([belowReserveAuction.auctionId]);
+await send(house.write.settle([settledAuction.auctionId]));
+await send(house.write.settle([belowReserveAuction.auctionId]));
 
 // ---------------------------------------------------------------------------
 // Phase 2 - the live auctions
